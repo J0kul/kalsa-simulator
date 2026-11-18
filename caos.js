@@ -6,6 +6,7 @@ export const WEAPONS = [
   { id: 'spada', name: 'Pesce spada', en: 'a frozen swordfish', melee: true, reach: 3.0, arc: 1.55, power: 11.5, dmg: 3, cd: 0.78, price: 18, shop: ['seafood', 'pesce'], cars: true, tip: 'frozen solid · sends cars flying' },
   { id: 'arancine', name: 'Arancine', en: 'arancine', thrown: true, speed: 19, power: 7, dmg: 2, cd: 0.42, pack: 6, price: 9, shop: ['fast_food', 'frittura', 'deli'], tip: 'throw them, or press G to eat one' },
   { id: 'fichi', name: 'Fichi d\'India', en: 'prickly pears', thrown: true, speed: 17, power: 2, dmg: 0.5, cd: 0.28, pack: 8, price: 4, shop: ['greengrocer', 'frutta', 'verdura'], hop: true, tip: 'full of spines · makes people dance' },
+  { id: 'verdura', name: 'Broccoli', en: 'broccoli', thrown: true, speed: 18, power: 3, dmg: 0.5, cd: 0.3, pack: 12, tip: 'from the police · Giorgio hates vegetables' },
   { id: 'gazzosa', name: 'Gazzosa', en: 'a shaken gazzosa', spray: true, range: 7.5, power: 5, cd: 0.07, pack: 60, price: 3, shop: ['bar', 'cafe', 'pub', 'beverages', 'convenience', 'alcohol', 'general'], tip: 'hold F to spray' },
 ];
 export const state = { hp: 100, weapon: 0, ammo: {}, owned: new Set(['pugni']), cd: 0, atkT: 0, atkKind: '', combo: 0, comboT: 0, lastHurt: -99, koT: 0, hits: 0, heli: null, heliOn: false, cover: false, coverT: 0, vend: null, vendT: 0, mouseHeld: false, punched: 0 };
@@ -68,7 +69,8 @@ export function init(game, vita) {
   geos.arancine = vcGeo([[new T.IcosahedronGeometry(0.13, 1), '#e3902f', M4(0, -0.08, 0.05)]]);
   geos.fichi = vcGeo([[new T.IcosahedronGeometry(0.1, 0), '#c0457a', M4(0, -0.08, 0.05, 1, 1.35, 1)], [Bx(0.03, 0.03, 0.03), '#e9e2c0', M4(0.06, -0.02, 0.1)]]);
   geos.gazzosa = vcGeo([[new T.CylinderGeometry(0.05, 0.055, 0.24, 8), '#cfe9d9', M4(0, -0.1, 0.05)], [new T.CylinderGeometry(0.02, 0.03, 0.09, 6), '#cfe9d9', M4(0, 0.06, 0.05)], [Bx(0.11, 0.09, 0.11), '#f7d23e', M4(0, -0.12, 0.05)]]);
-  geos.shotA = new T.IcosahedronGeometry(0.15, 1); geos.shotF = new T.IcosahedronGeometry(0.11, 0);
+  geos.shotA = new T.IcosahedronGeometry(0.15, 1); geos.shotF = new T.IcosahedronGeometry(0.11, 0); geos.shotV = new T.IcosahedronGeometry(0.17, 1);
+  geos.verdura = vcGeo([[new T.IcosahedronGeometry(0.12, 1), '#3e8a57', M4(0, -0.02, 0.05, 1.1, 0.8, 1.1)], [new T.CylinderGeometry(0.03, 0.04, 0.14, 8), '#8fbf6a', M4(0, -0.12, 0.05)]]);
   parts = new T.InstancedMesh(Bx(0.09, 0.09, 0.09), new T.MeshStandardMaterial({ roughness: 0.8 }), 260);
   parts.count = 0; parts.frustumCulled = false; G.scene.add(parts);
   // ---- the helicopter that turns up at four stars
@@ -104,6 +106,7 @@ function eat() {
   if (!live() || !(state.ammo.arancine > 0) || state.hp >= 100) return;
   state.ammo.arancine--; state.hp = Math.min(100, state.hp + 30); G.sfx.pick(); G.say(G.player.mesh, G.pick(['Gnam!', 'Bona!', 'Cavura cavura!']), 1000); renderHud();
 }
+export function select(id) { const i = WEAPONS.findIndex((q) => q.id === id); if (i >= 0 && state.owned.has(id)) pickWeapon(i); }
 export function give(id, n) { const w = WEAPONS.find((q) => q.id === id); if (!w) return; state.owned.add(id); if (!w.melee) state.ammo[id] = (state.ammo[id] || 0) + (n || w.pack); renderHud(); }
 
 // ---- buying
@@ -182,7 +185,7 @@ function attack() {
     if (hit) { G.sfx.thud(); G.cam.shake = Math.max(G.cam.shake, w.cars ? 0.35 : 0.15); } else G.sfx.pick();
   } else if (w.thrown) {
     state.ammo[w.id]--;
-    const sp = p.vespa ? p.vespa.speed : p.speed, m = new G.THREE.Mesh(w.id === 'arancine' ? geos.shotA : geos.shotF, G.M(w.id === 'arancine' ? '#e3902f' : '#c0457a'));
+    const sp = p.vespa ? p.vespa.speed : p.speed, m = new G.THREE.Mesh(w.id === 'arancine' ? geos.shotA : w.id === 'verdura' ? geos.shotV : geos.shotF, G.M(w.id === 'arancine' ? '#e3902f' : w.id === 'verdura' ? '#3e8a57' : '#c0457a'));
     m.castShadow = true; G.scene.add(m);
     const d = best ? Math.hypot(best.x - ox, best.y - oy) : 14;
     shots.push({ m, w, x: ox + Math.cos(a) * 0.5, y: oy + Math.sin(a) * 0.5, z: 1.55 + (p.z || 0), vx: Math.cos(a) * (w.speed + sp * 0.6), vy: Math.sin(a) * (w.speed + sp * 0.6), vz: 1.2 + d * 0.28, t: 0 });

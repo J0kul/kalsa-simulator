@@ -5617,7 +5617,7 @@ function padPanel() {
   const vis = (id) => { const e = document.getElementById(id); return e && !e.hidden && e.getClientRects().length > 0 ? e : null; };
   if (typeof studio !== 'undefined' && studio.open) return vis('studio');
   if (bigMap.open) return vis('map');
-  return vis('menu') || vis('result') || vis('news') || (!game.started && vis('title')) || vis('talk');
+  return vis('menu') || vis('result') || vis('news') || (!game.started && vis('title')) || vis('gioTalk') || vis('talk');
 }
 function padFocusables(root) {
   return [...root.querySelectorAll('button, select, input, [tabindex="0"]')].filter((e) => !e.disabled && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden');
@@ -8776,7 +8776,7 @@ try {
     WG, CG, sfx, isTouch, vips, convos, talk, labelTargets, ZIA, FRIG, MODELS, VSPEC, TAU, dummy, vcMat,
     $, rand, pick, clamp, lerp, angDiff, hash, centroid, pip, say, toast, hint, showTG, project, resolve, resolveProps, propsNear, rayWalls, launchPed, launchPlayer, launchTraffic, launchParked,
     reactAround, setReact, setDance, startConvo, endConvo, afterSocial, resumeWalk, placePed, stepTo, faceTo, makePerson, randomLook, fullLook, posePerson, animatePerson, addMoney, fmtEur,
-    RACE, addSeg, finalizeSegs, police, PAD, hideParked, placeCar, perfWarm, noLod: (m) => { if (m.userData.lod) { const u = m.userData.lod; for (let i = 0; i < 6; i++) u.parts[i].geometry = u.hi[i]; LOD_PEOPLE.delete(m); } }, HDK: cittaApi.HDK, wallet, reportCrime, setWanted, resetPolice, nearestStreetName, nearestRoadDir, routeOn, nearestEdge, along, inPlay, spawnVehicle, dismount, dropArancina, closeTalk, knockWalker, vcGeo, T, M, C, pedKind, pedName };
+    makePoliceCar, policeLook, showTG, giveWeapon: (id, n, sel) => { if (CAOS) { CAOS.give(id, n); if (sel && CAOS.select) CAOS.select(id); } }, RACE, addSeg, finalizeSegs, police, PAD, hideParked, placeCar, perfWarm, noLod: (m) => { if (m.userData.lod) { const u = m.userData.lod; for (let i = 0; i < 6; i++) u.parts[i].geometry = u.hi[i]; LOD_PEOPLE.delete(m); } }, HDK: cittaApi.HDK, wallet, reportCrime, setWanted, resetPolice, nearestStreetName, nearestRoadDir, routeOn, nearestEdge, along, inPlay, spawnVehicle, dismount, dropArancina, closeTalk, knockWalker, vcGeo, T, M, C, pedKind, pedName };
   const [caos, vita] = await Promise.all([loadMod('./caos.js'), loadMod('./vita.js')]);
   caos.init(GAME, vita); vita.init(GAME, caos);
   CAOS = caos; VITA = vita;
