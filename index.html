@@ -481,7 +481,7 @@ body:has(#arrest:not([hidden])) #hint, body:has(#news:not([hidden])) #hint { dis
       <button class="btn ghost" id="menuSound" type="button">Sound: on</button>
     </div>
     <div class="keys">
-      <div><kbd>R</kbd> restart mission</div><div><kbd>F</kbd> hit, throw</div><div><kbd>Q</kbd> swap weapon</div><div><kbd>G</kbd> eat</div><div><kbd>O</kbd> soft shadows</div><div><kbd>T</kbd> talk</div><div><kbd>E</kbd> grab, drive, ride, shop</div><div><kbd>M</kbd> map</div><div><kbd>H</kbd> horn</div><div><kbd>N</kbd> mute</div>
+      <div><kbd>R</kbd> restart quest</div><div><kbd>F</kbd> hit, throw</div><div><kbd>Q</kbd> swap weapon</div><div><kbd>G</kbd> eat</div><div><kbd>O</kbd> soft shadows</div><div><kbd>T</kbd> talk</div><div><kbd>E</kbd> grab, drive, ride, shop</div><div><kbd>M</kbd> map</div><div><kbd>H</kbd> horn</div><div><kbd>N</kbd> mute</div>
     </div>
   </div>
 </div>
@@ -5531,7 +5531,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyO' && post.composer) { post.on = !post.on; post.user = true; toast(post.on ? 'Soft shadows on' : 'Soft shadows off', '', 900); }
   if (e.code === 'KeyN') { const m = sfx.toggle(); toast(m ? 'Muted' : 'Sound on', '', 900); }
   if (e.code === 'KeyM' && game.started && !player.cuffed) { keys.delete('KeyM'); openMap(); return; }
-  if (e.code === 'KeyR' && game.started && !player.cuffed && !player.inCar) { if (CORSA && !e.repeat && CORSA.key()) return; resetMission(true); }
+  if (e.code === 'KeyR' && game.started && !player.cuffed && !player.inCar) { if (CORSA && !e.repeat && CORSA.key()) return; if (e.repeat) return; if (game.track === 'arancina' || game.state === 'carry') resetMission(true); else toast('No quest to restart', isTouch ? 'pick one from the menu' : 'pick one from the menu (Esc)', 1400); }
   if (e.code.startsWith('Arrow')) e.preventDefault();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -5895,6 +5895,7 @@ function drawMini(target) {
     }
     edgeMark({ x: RACE.sx, y: RACE.sy }, '#f59ac4', 6);
   }
+  if (GIO) { const gi = GIO.mapInfo(); if (gi.giant) edgeMark(gi.giant, '#d7261e', 10); }
   if (RETE) RETE.mapDots((r) => edgeMark(r, '#6fd3ff', 7));
   const heading = player.vespa ? player.vespa.heading : player.a;
   c.save(); c.translate(Wm / 2, Wm / 2); c.rotate(-heading + rho + Math.PI / 2);
@@ -5974,8 +5975,9 @@ function drawBigMap() {
   { g.save(); g.lineJoin = 'round'; g.strokeStyle = '#141116'; g.lineWidth = 5 * d; g.beginPath(); RACE.pts.forEach((p, i) => { const [sx, sy] = mapW2S(p[0], p[1]); i ? g.lineTo(sx, sy) : g.moveTo(sx, sy); }); g.closePath(); g.stroke(); g.strokeStyle = '#f59ac4'; g.lineWidth = 2.5 * d; g.stroke(); g.restore(); pin(RACE.sx, RACE.sy, '#f59ac4', 'Kalsa Grand Prix'); }
   if (RETE) RETE.mapDots((r, name) => pin(r.x, r.y, '#6fd3ff', name));
   for (const u of police.units) if (u.car.visible) { const [sx, sy] = mapW2S(u.cx, u.cy); g.fillStyle = '#2a5bd7'; g.beginPath(); g.arc(sx, sy, 6 * d, 0, TAU); g.fill(); g.strokeStyle = '#d7261e'; g.lineWidth = 2 * d; g.stroke(); }
-  const tgt = game.state === 'idle' ? { x: FRIG.sx, y: FRIG.sy, n: 'Friggitoria' } : game.state === 'carry' ? { x: ZIA.x, y: ZIA.y, n: 'Zia Rosalia' } : null;
-  if (tgt) pin(tgt.x, tgt.y, '#d9558f', tgt.n);
+  const tgt = questTarget();
+  if (tgt && !tgt.near) pin(tgt.x, tgt.y, '#d9558f', tgt.n);
+  if (GIO) { const gi = GIO.mapInfo(); if (gi.giant) pin(gi.giant.x, gi.giant.y, '#d7261e', 'Giorgio'); }
   if (gps.wp) pin(gps.wp.x, gps.wp.y, '#ffd23f', 'Destination');
   {
     const [sx, sy] = mapW2S(player.x, player.y), h = player.vespa ? player.vespa.heading : player.a;
@@ -6042,7 +6044,7 @@ function clampMap() { bigMap.cx = clamp(bigMap.cx, PLAY[0], PLAY[2]); bigMap.cy 
 
 
 // ------------------------------------------------------------------ game state
-const game = { started: false, state: 'idle', t: 0, lastCmp: '', fail: false, plaqueT: 0, endT: 0 };
+const game = { track: null, started: false, state: 'idle', t: 0, lastCmp: '', fail: false, plaqueT: 0, endT: 0 };
 const clock = new THREE.Clock();
 function resetMission(teleport) {
   if (teleport && (player.cuffed || player.inCar)) { respawnAfterArrest(); return; }
@@ -6051,19 +6053,28 @@ function resetMission(teleport) {
   $('counter').hidden = true;
   $('news').hidden = true; $('result').hidden = true;
   rice.length = 0; riceIM.count = 0;
+  game.track = teleport ? 'arancina' : null;
   if (teleport) {
+    if (GIO && GIO.inside()) GIO.stop();
     if (player.vespa) dismount();
     player.x = FRIG.x + Math.cos(FRIG.dir) * 6; player.y = FRIG.y + Math.sin(FRIG.dir) * 6; player.fly = null;
     cam.yaw = Math.atan2(FRIG.y - player.y, FRIG.x - player.x);
   }
   objective();
 }
+function questTarget() {
+  if (game.state === 'carry') return { x: ZIA.x, y: ZIA.y, name: 'Piazza Magione', text: 'Bring it to Zia Rosalia · Piazza Magione', n: 'Zia Rosalia', h: 3.4 };
+  if (game.track === 'arancina' && game.state === 'idle') return { x: FRIG.sx, y: FRIG.sy, name: 'the friggitoria', text: 'Pick up the arancina at the friggitoria', n: 'Friggitoria', h: 4.6 };
+  if (GIO) { const o = GIO.objective(); if (o) return { x: o.x, y: o.y, name: o.name, text: o.text, n: o.name, h: 6, near: o.near }; }
+  return null;
+}
 function objective() {
-  $('objective').hidden = false;
-  if (game.state === 'idle') $('objText').textContent = 'Pick up the arancina at the friggitoria';
-  else $('objText').textContent = 'Bring it to Zia Rosalia · Piazza Magione';
+  const q = questTarget();
+  $('objective').hidden = !q;
+  if (q) $('objText').textContent = q.text;
 }
 function startCarry() {
+  game.track = 'arancina';
   game.state = 'carry'; game.t = 0; aran.D = D0; aran.active = true; aran.mesh.visible = true; player.carry = true; aran.stuck = 0;
   $('counter').hidden = false; game.lastCmp = '';
   stats.peds = 0; stats.cars = 0;
@@ -6074,7 +6085,7 @@ function startCarry() {
   objective();
 }
 function deliver() {
-  game.state = 'done';
+  game.state = 'done'; game.track = null;
   recordDelivery('arancina', aran.D);
   const tip = aran.D < 0.4 ? 15 : aran.D < 1.6 ? 10 : 5;
   addMoney(tip);
@@ -6098,7 +6109,7 @@ function deliver() {
   $('counter').hidden = true;
 }
 function fail(kind) {
-  game.state = 'fail';
+  game.state = 'fail'; game.track = null;
   recordFail('arancina');
   const street = nearestStreetName(aran.x, aran.y) || 'nella Kalsa';
   if (kind === 'burst') {
@@ -6603,6 +6614,7 @@ function interact() {
     startCarry();
     return;
   }
+  if (GIO && GIO.interact()) return;
   if (player.vespa) { dismount(); return; }
   if (STORE && STORE.interact()) return;
   if (CAOS && CAOS.interact()) return;
@@ -6615,6 +6627,7 @@ function interact() {
 function updateHints() {
   if (!game.started || game.state === 'fail' || game.state === 'done') { hint(''); return; }
   if (game.state === 'idle' && Math.hypot(player.x - FRIG.sx, player.y - FRIG.sy) < 4.5) { hint(isTouch ? 'Tap <kbd>E</kbd> to grab the arancina' : 'Press <kbd>E</kbd> to grab the arancina'); return; }
+  if (GIO) { const h = GIO.hint(); if (h) { hint(h); return; } }
   if (STORE) { const h = STORE.hint(); if (h) { hint(h); return; } }
   if (CAOS) { const h = CAOS.hint(); if (h) { hint(h); return; } }
   if (!player.vespa && !player.fly) {
@@ -6635,15 +6648,15 @@ function updateCamera(dt) {
   else { tx = player.x; ty = player.y; th = 1.5 + player.z * 0.6; heading = player.a; }
   const big = aran.active && !player.carry ? aran.D : 0;
   const base = player.vespa ? Math.max(player.vespa.spec.cam || 10, cam.dist) : player.inCar ? 12 : cam.dist;
-  const indoor = STORE && STORE.inside;
-  const want = indoor ? Math.min(6.0, cam.dist) : Math.max(base, big * 1.25 + 6);
+  const inRest = !!(GIO && GIO.inside()), indoor = STORE && STORE.inside && !inRest;
+  const want = inRest ? 9 : indoor ? Math.min(6.0, cam.dist) : Math.max(base, big * 1.25 + 6);
   cam.tx = lerp(cam.tx, tx, Math.min(1, dt * 8)); cam.ty = lerp(cam.ty, ty, Math.min(1, dt * 8)); cam.th = lerp(cam.th, th + big * 0.15, Math.min(1, dt * 4));
   // auto-follow behind the direction of travel
   const moving = player.vespa ? Math.abs(player.vespa.speed) > 1.5 : player.speed > 1;
   if (moving && clock.elapsedTime - cam.lastDrag > 1.4) {
     cam.yaw += angDiff(cam.yaw, heading) * Math.min(1, dt * (player.vespa ? 2.2 : 1.1));
   }
-  const pitch = indoor ? Math.min(0.42, cam.pitch) : cam.pitch + (big > 4 ? 0.2 : 0);
+  const pitch = inRest ? 0.95 : indoor ? Math.min(0.42, cam.pitch) : cam.pitch + (big > 4 ? 0.2 : 0);
   const horiz = Math.cos(pitch) * want;
   const offX = -Math.cos(cam.yaw) * horiz, offY = -Math.sin(cam.yaw) * horiz;
   const camH = cam.th + Math.sin(pitch) * want;
@@ -6672,7 +6685,7 @@ function updateCamera(dt) {
 function updateLabels(dt) {
   const near = [];
   for (const L of labelTargets) {
-    if (L.mission === 1 && game.state !== 'idle') continue;
+    if (L.mission === 1 && !(game.state === 'idle' && game.track === 'arancina')) continue;
     if (L.mission === 2 && game.state !== 'carry') continue;
     const d = Math.hypot(L.x - player.x, L.y - player.y);
     const lim = L.mission ? 400 : 75;
@@ -6895,8 +6908,7 @@ function setTalkBusy(b) { for (const el of talkEl.querySelectorAll('button[data-
 // a short timeline of beats: [who 'p'|'n', text, pose, seconds, fn]
 function runTalk(seq) { talk.seq = seq.slice(); talk.busy = 0; talk.cur = null; setTalkBusy(true); }
 function objectiveTarget() {
-  if (game.state === 'idle') return { x: FRIG.sx, y: FRIG.sy, name: 'the friggitoria' };
-  if (game.state === 'carry') return { x: ZIA.x, y: ZIA.y, name: 'Piazza Magione' };
+  { const q = questTarget(); if (q && !q.near) return { x: q.x, y: q.y, name: q.name }; }
   if (STORE) return { x: STORE.door[0], y: STORE.door[1], name: 'the supermarket' };
   return { x: LM.quattroCanti[0], y: LM.quattroCanti[1], name: 'Quattro Canti' };
 }
@@ -8171,7 +8183,7 @@ function updateVips(dt) {
 
 // ------------------------------------------------------------------ loop
 let objT = 0;
-let CAOS = null, VITA = null, RETE = null, CORSA = null; // combat, street life and multiplayer (caos.js, vita.js, rete.js), loaded at the end
+let CAOS = null, VITA = null, RETE = null, CORSA = null, GIO = null; // combat, street life and multiplayer (caos.js, vita.js, rete.js), loaded at the end
 // adaptive resolution: keep the frame rate up on slower GPUs
 const DPR_MAX = renderer.getPixelRatio();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { try { perfWarm(3); } catch (e) {} } });
@@ -8267,7 +8279,7 @@ function tick(dt) {
     modUpdate(CAOS, dt);
   }
   updatePeds(dt);
-  if (game.started) { modUpdate(VITA, dt); modUpdate(RETE, dt); modUpdate(CORSA, dt); }
+  if (game.started) { modUpdate(VITA, dt); modUpdate(RETE, dt); modUpdate(CORSA, dt); modUpdate(GIO, dt); }
   for (const p of peds) { const d = Math.abs(p.x - cam.tx) + Math.abs(p.y - cam.ty); p.mesh.visible = d < 150 || p.state === 'fly'; }
   updateVips(dt);
   updateTraffic(dt);
@@ -8281,13 +8293,14 @@ function tick(dt) {
   zia.rotation.y = Math.atan2(player.y - ZIA.y, player.x - ZIA.x) + Math.PI / 2;
   animatePerson(zia, clock.elapsedTime * 3, game.state === 'carry' ? 0.12 : 0, game.state === 'carry' ? -2.6 + Math.sin(clock.elapsedTime * 6) * 0.3 : 0);
   // beacon
-  const tgt = game.state === 'idle' ? { x: FRIG.sx, y: FRIG.sy } : game.state === 'carry' ? ZIA : null;
-  beacon.visible = diamond.visible = !!tgt && game.started;
+  const tgt = questTarget();
+  beacon.visible = diamond.visible = !!tgt && !tgt.near && game.started;
   if (tgt) {
     beacon.position.set(tgt.x, 30, -tgt.y);
-    diamond.position.set(tgt.x, (game.state === 'idle' ? 4.6 : 3.4) + Math.sin(clock.elapsedTime * 2.5) * 0.15, -tgt.y);
+    diamond.position.set(tgt.x, tgt.h + Math.sin(clock.elapsedTime * 2.5) * 0.15, -tgt.y);
     diamond.rotation.y += dt * 2;
   }
+  if (game.started) { const q = questTarget(), el = $('objective'); if (el.hidden !== !q) objective(); else if (q && $('objText').textContent !== q.text) objective(); }
   updateCamera(dt);
   if (game.debugCam) { const d = game.debugCam; camera.position.set(d[0], d[2], -d[1]); camera.lookAt(d[3], d[5], -d[4]); sun.position.set(d[3] + SUN_OFF.x, SUN_OFF.y, -d[4] + SUN_OFF.z); sun.target.position.set(d[3], 0, -d[4]); scene.userData.sky.position.copy(camera.position); }
   {
@@ -8338,7 +8351,7 @@ const local = {
 };
 
 // ------------------------------------------------------------------ missions and the pause menu
-const MISSIONS = [{ id: 'arancina', name: 'Arancina per Zia Rosalia', where: 'Friggitoria · Piazza San Francesco → Piazza Magione' }];
+const MISSIONS = [{ id: 'arancina', name: 'Arancina per Zia Rosalia', where: 'Friggitoria · Piazza San Francesco → Piazza Magione' }, { id: 'giorgio', name: 'La fame di Giorgio', where: 'Tutto Compreso, Via Maqueda · a city event everyone online can join' }];
 let records = local.get('kalsa.records', {});
 function rec(id) { return records[id] || (records[id] = { runs: 0, delivered: 0, failed: 0, smallest: null, biggest: null }); }
 function recordStart(id) { rec(id).runs++; local.set('kalsa.records', records); }
@@ -8354,11 +8367,14 @@ function missionStatus() {
 function renderMissions() {
   const list = $('missionList'); list.innerHTML = '';
   for (const m of MISSIONS) {
-    const [code, st, detail] = missionStatus();
+    if (m.id === 'giorgio') { if (GIO) list.append(giorgioCard(m)); continue; }
+    const [code, st0, detail0] = missionStatus();
+    const tracked = game.track === 'arancina' || game.state === 'carry';
+    const st = game.state === 'idle' && !tracked ? 'Not started' : st0, detail = game.state === 'idle' && !tracked ? 'Optional · grab it at the friggitoria whenever you like' : detail0;
     const r = records[m.id];
     const card = document.createElement('div'); card.className = 'mission';
     card.innerHTML = '<div class="m-head"><b></b><span class="chip"></span></div><div class="m-where"></div><div class="m-sub"></div><div class="m-rec"></div>'
-      + '<div class="row m-actions"><button class="btn small" type="button" data-a="restart">Restart mission</button><button class="btn ghost small" type="button" data-a="abandon">Abandon</button></div>';
+      + `<div class="row m-actions"><button class="btn small" type="button" data-a="restart">${tracked ? 'Restart' : 'Start'}</button><button class="btn ghost small" type="button" data-a="abandon">${game.state === 'carry' ? 'Abandon' : 'Stop tracking'}</button></div>`;
     card.querySelector('b').textContent = m.name;
     const chip = card.querySelector('.chip'); chip.textContent = st; chip.dataset.s = code;
     card.querySelector('.m-where').textContent = m.where;
@@ -8366,11 +8382,26 @@ function renderMissions() {
     card.querySelector('.m-rec').textContent = r && r.delivered
       ? `Delivered ${r.delivered}× · smallest ${fmtD(r.smallest)} · biggest ${fmtD(r.biggest)}${r.failed ? ` · failed ${r.failed}×` : ''}`
       : r && r.runs ? `${r.runs} ${r.runs === 1 ? 'try' : 'tries'}, no deliveries yet` : 'No attempts yet';
-    const ab = card.querySelector('[data-a="abandon"]'); ab.disabled = game.state !== 'carry';
+    const ab = card.querySelector('[data-a="abandon"]'); ab.disabled = !tracked;
     card.querySelector('[data-a="restart"]').addEventListener('click', () => { closeMenu(); resetMission(true); toast('Mission restarted', 'back at the friggitoria', 1600); });
-    ab.addEventListener('click', () => { closeMenu(); resetMission(false); toast('Mission abandoned', 'the arancina is gone', 1500); });
+    ab.addEventListener('click', () => { closeMenu(); const was = game.state === 'carry'; resetMission(false); toast(was ? 'Mission abandoned' : 'Not tracking it', was ? 'the arancina is gone' : 'roam free', 1500); });
     list.append(card);
   }
+}
+function giorgioCard(m) {
+  const [code, st, detail] = GIO.status(), on = GIO.active();
+  const card = document.createElement('div'); card.className = 'mission';
+  card.innerHTML = '<div class="m-head"><b></b><span class="chip"></span></div><div class="m-where"></div><div class="m-sub"></div><div class="m-rec"></div>'
+    + `<div class="row m-actions"><button class="btn small" type="button" data-a="go">${on ? 'Show me' : 'Start'}</button><button class="btn ghost small" type="button" data-a="stop">Stop tracking</button></div>`;
+  card.querySelector('b').textContent = m.name;
+  const chip = card.querySelector('.chip'); chip.textContent = st; chip.dataset.s = code;
+  card.querySelector('.m-where').textContent = m.where;
+  card.querySelector('.m-sub').textContent = detail;
+  card.querySelector('.m-rec').textContent = 'Go and eat at the all-you-can-eat on Via Maqueda. Giorgio is in the queue, and he is very hungry.';
+  card.querySelector('[data-a="stop"]').disabled = !on;
+  card.querySelector('[data-a="go"]').addEventListener('click', () => { closeMenu(); GIO.start(); if (game.state !== 'carry') game.track = 'giorgio'; objective(); toast('La fame di Giorgio', 'follow the pink marker', 1600); });
+  card.querySelector('[data-a="stop"]').addEventListener('click', () => { closeMenu(); GIO.stop(); if (game.track === 'giorgio') game.track = null; objective(); toast('Not tracking it', 'roam free', 1300); });
+  return card;
 }
 function openMenu() {
   if (!game.started || studio.open) return;
@@ -8745,7 +8776,7 @@ try {
     WG, CG, sfx, isTouch, vips, convos, talk, labelTargets, ZIA, FRIG, MODELS, VSPEC, TAU, dummy, vcMat,
     $, rand, pick, clamp, lerp, angDiff, hash, centroid, pip, say, toast, hint, showTG, project, resolve, resolveProps, propsNear, rayWalls, launchPed, launchPlayer, launchTraffic, launchParked,
     reactAround, setReact, setDance, startConvo, endConvo, afterSocial, resumeWalk, placePed, stepTo, faceTo, makePerson, randomLook, fullLook, posePerson, animatePerson, addMoney, fmtEur,
-    RACE, addSeg, finalizeSegs, police, PAD, reportCrime, setWanted, resetPolice, nearestStreetName, nearestRoadDir, routeOn, nearestEdge, along, inPlay, spawnVehicle, dismount, dropArancina, closeTalk, knockWalker, vcGeo, T, M, C, pedKind, pedName };
+    RACE, addSeg, finalizeSegs, police, PAD, hideParked, placeCar, perfWarm, noLod: (m) => { if (m.userData.lod) { const u = m.userData.lod; for (let i = 0; i < 6; i++) u.parts[i].geometry = u.hi[i]; LOD_PEOPLE.delete(m); } }, HDK: cittaApi.HDK, wallet, reportCrime, setWanted, resetPolice, nearestStreetName, nearestRoadDir, routeOn, nearestEdge, along, inPlay, spawnVehicle, dismount, dropArancina, closeTalk, knockWalker, vcGeo, T, M, C, pedKind, pedName };
   const [caos, vita] = await Promise.all([loadMod('./caos.js'), loadMod('./vita.js')]);
   caos.init(GAME, vita); vita.init(GAME, caos);
   CAOS = caos; VITA = vita;
@@ -8758,6 +8789,7 @@ try {
   RETE = rete;
   }
   stage('marking out the circuit');
+  try { const gio = await loadMod('./giorgio.js', 15000); gio.init(GAME, RETE); GIO = gio; GAME.boss = gio; } catch (e) { console.error('giorgio.js', e); BOOT.errs.push('giorgio.js: ' + (e && e.message)); BOOT.missing.push('Giorgio'); }
   try { const corsa = await loadMod('./corsa.js', 15000); corsa.init(GAME, RETE); CORSA = corsa; } catch (e) { console.error('corsa.js', e); BOOT.errs.push('corsa.js: ' + (e && e.message)); BOOT.missing.push('racing'); }
 } catch (e) { console.error('upgrade modules failed to load', e); BOOT.errs.push('add-ons: ' + (e && e.message)); BOOT.missing.push('combat and street life'); }
 stage('finishing');
@@ -8779,9 +8811,9 @@ startBtn.addEventListener('click', () => {
   $('menuBtn').hidden = false;
   if (isTouch) $('touch').hidden = false;
   objective();
-  toast('Benvenuto nella Kalsa', 'the friggitoria is marked in pink', 2600);
+  toast('Benvenuto nella Kalsa', isTouch ? 'roam free · quests are in the menu' : 'roam free · quests are in the menu (Esc)', 2600);
 });
-window.__kalsa = { perf, post, LOD_PEOPLE, personLod, PAD, padPanel: () => { try { const p = padPanel(); return p && p.id; } catch (e) { return String(e); } }, game, cam, CORSA: () => CORSA, RACE, makeVehicleMesh, makePoliceCar, CAOS, VITA, CITTA, RETE, BOOT, FAC, renderer, cityMat, clock, launchPed, launchPlayer, dispatch, afterSocial, SPECIALS, LM, streamAround, rebuildNear, CHUNKS, stream, spawnVehicle, takeParked, nearestRide, parked, MODELS, VSPEC, gps, setWaypoint, clearWaypoint, openMap, closeMap, bigMap, drawBigMap, LOTS, player, game, aran, cam, camera, sfx, vespas, FRIG, ZIA, scene, renderer, peds, traffic, nearestRoadDir, tick, keys, stats, roads, STORE, convos, talk, openTalk, talkOption, closeTalk, nearestTalkable, roster, syncRoster, studio, openStudio, closeStudio, rebuildPreview, openMenu, closeMenu, resetAll, records, posePerson, makePerson, fullLook, presetLook, setPlayerLook, encodeLook, decodeLook, startConvo, press: (k) => { if (k === 'E') actPressed = true; }, police, wallet, reportCrime, startThief, vips, addMoney, CG: () => CG, WG: () => WG, routeOn, surrender: () => respawnAfterArrest() };
+window.__kalsa = { GIO: () => GIO, questTarget, perf, post, LOD_PEOPLE, personLod, PAD, padPanel: () => { try { const p = padPanel(); return p && p.id; } catch (e) { return String(e); } }, game, cam, CORSA: () => CORSA, RACE, makeVehicleMesh, makePoliceCar, CAOS, VITA, CITTA, RETE, BOOT, FAC, renderer, cityMat, clock, launchPed, launchPlayer, dispatch, afterSocial, SPECIALS, LM, streamAround, rebuildNear, CHUNKS, stream, spawnVehicle, takeParked, nearestRide, parked, MODELS, VSPEC, gps, setWaypoint, clearWaypoint, openMap, closeMap, bigMap, drawBigMap, LOTS, player, game, aran, cam, camera, sfx, vespas, FRIG, ZIA, scene, renderer, peds, traffic, nearestRoadDir, tick, keys, stats, roads, STORE, convos, talk, openTalk, talkOption, closeTalk, nearestTalkable, roster, syncRoster, studio, openStudio, closeStudio, rebuildPreview, openMenu, closeMenu, resetAll, records, posePerson, makePerson, fullLook, presetLook, setPlayerLook, encodeLook, decodeLook, startConvo, press: (k) => { if (k === 'E') actPressed = true; }, police, wallet, reportCrime, startThief, vips, addMoney, CG: () => CG, WG: () => WG, routeOn, surrender: () => respawnAfterArrest() };
 
 </script>
 

@@ -139,11 +139,13 @@ function eachTarget(fn) {
   for (const u of G.police.units) for (const o of u.officers) if (o.mesh.visible && o.state !== 'car' && o.state !== 'fly' && o.state !== 'down') fn(o, 'cop');
   const t = G.police.thief; if (t && (t.state === 'run' || t.state === 'flee' || t.state === 'browse')) fn(t, 'thief');
   if (G.net) for (const r of G.net.targets()) fn(r, 'net');   // other players
+  if (G.boss) for (const o of G.boss.targets()) fn(o, 'boss');
 }
 function strike(o, type, fx, fy, w, power) {
   if (type === 'ped') { o.hp = (o.hp == null ? (o.vigile ? 4 : 3) : o.hp) - w.dmg; G.player.striking = true; try { G.launchPed(o, fx, fy, power); } finally { G.player.striking = false; } if (w.hop && o.state === 'fly') o.hopAfter = true; }
   else if (type === 'cop') { if (G.knockWalker(o, fx, fy, power)) { G.say(o.mesh, G.pick(['Ahia! Resistenza a pubblico ufficiale!', 'Questo è oltraggio!']), 1600); G.reportCrime('officer', o.x, o.y, { victim: o.name }); } }
   else if (type === 'net') G.net.hit(o, fx, fy, power, w.dmg);
+  else if (type === 'boss') G.boss.hit(o, fx, fy, power, w.dmg);
   else if (type === 'thief') { o.state = 'down'; o.t = 4.5; o.tackled = (o.tackled || 0) + 1; G.sfx.thud(); G.toast('Tackled!', 'keep him down until the police get here', 1600); }
   bumpCombo();
 }
@@ -222,6 +224,7 @@ function updateShots(dt) {
         eachTarget((o, type) => { if (!done && s.z < 2.4 && Math.hypot(o.x - s.x, o.y - s.y) < 0.75) { strike(o, type, s.x - s.vx * 0.1, s.y - s.vy * 0.1, s.w, s.w.power); if (s.w.hop && type === 'ped') G.say(o.mesh, G.pick(['Ahi! Ahi! I spini!', 'Ficudinnia?!', 'Punge! Punge!']), 1500); splat(s, s.x, s.y, s.z); done = true; } });
         if (!done) for (const c of G.traffic) if (c.state === 'drive' && s.z < 2 && Math.hypot(c.x - s.x, c.y - s.y) < 1.9) { c.speed = 0; c.honk = 0; G.sfx.carHorn(); splat(s, s.x, s.y, s.z); crime('vandal', c.x, c.y); done = true; break; }
         if (!done && V && V.hitAt(s.x, s.y, 0.6, Math.atan2(s.vy, s.vx), 6, s.z)) { splat(s, s.x, s.y, s.z); done = true; }
+        if (!done && G.boss && G.boss.shotHit(s)) { splat(s, s.x, s.y, s.z); done = true; }
       }
     }
     if (done) shots.splice(i, 1); else { s.m.position.set(s.x, s.z, -s.y); s.m.rotation.x += dt * 9; }

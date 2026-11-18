@@ -92,6 +92,7 @@ function take(p) {
   r.k = typeof d.k === 'string' && G.VSPEC[d.k] ? d.k : null; r.c = typeof d.c === 'string' && /^#[0-9a-f]{6}$/i.test(d.c) ? d.c : '#f59ac4';
   { const q = d.rc; r.rc = q && typeof q === 'object' && typeof q.g === 'string' && /^[a-z0-9]{4,12}$/.test(q.g) && ['w', 'r', 'f'].includes(q.s)
       ? { g: q.g, s: q.s, w: G.clamp(num(q.w), 0, 10), l: G.clamp(num(q.l) | 0, 0, 9), c: G.clamp(num(q.c) | 0, 0, 40), ft: G.clamp(num(q.ft), 0, 3600) } : null; }
+  r.ext = { gz: cleanExt(d.gz), gd: cleanExt(d.gd) };
   r.h = num(d.h); r.hp = G.clamp(num(d.hp, 100), 0, 100); r.heat = G.clamp(num(d.heat) | 0, 0, 5); r.w = typeof d.w === 'string' ? d.w.slice(0, 12) : '';
   if (typeof d.look === 'string' && d.look !== r.lookStr && d.look.length < 3000) {
     r.lookStr = d.look;
@@ -176,6 +177,7 @@ export function update(dt) {
     if (L && L !== S.lookObj) { S.lookObj = L; try { S.lookStr = JSON.stringify({ ...L, lines: undefined }); } catch (e) { S.lookStr = ''; } if (S.lookStr.length > 2800) S.lookStr = ''; }
     if (S.lookStr !== S.lookSent) { patch.look = S.lookStr; S.lookSent = S.lookStr; }
     if (S.rc !== S.rcSent) { patch.rc = S.rc; S.rcSent = S.rc; }
+    if (S.ex) for (const k in S.ex) patch[k] = S.ex[k];
     room.presence(patch).catch(() => {});
   }
   // names, as this viewer is allowed to see them
@@ -235,6 +237,20 @@ export function update(dt) {
 export function attacked() { S.atkN++; }
 // the race (corsa.js) publishes its state through my presence and reads everyone else's
 export function setRace(o) { S.rc = o; }
+// small flat objects other modules publish (only numbers and short plain words get through)
+export function setExtra(k, o) { (S.ex || (S.ex = {}))[k] = o; }
+function cleanExt(o) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+  const out = {}; let n = 0;
+  for (const k in o) {
+    if (++n > 24 || !/^[a-z]{1,4}$/.test(k)) continue;
+    const v = o[k];
+    if (typeof v === 'number' && isFinite(v)) out[k] = Math.max(-1e6, Math.min(1e6, v));
+    else if (typeof v === 'string' && /^[a-z0-9]{0,16}$/.test(v)) out[k] = v;
+  }
+  return out;
+}
+export const peersExt = () => list().filter((r) => r.ext);
 export const racers = () => list().filter((r) => r.rc);
 export const myPeer = () => me;
 export { nameOf };
