@@ -5207,74 +5207,6 @@ const driveRoads = roads.filter((r) => r.k <= 4 && r.hw >= 3.2 && r.k !== 6 && !
   for (let j = 1; j < r.pts.length; j++) cum.push(cum[j - 1] + Math.hypot(r.pts[j][0] - r.pts[j - 1][0], r.pts[j][1] - r.pts[j - 1][1]));
   return { ...r, cum, len: cum[cum.length - 1] };
 }).filter((r) => r.len > 40);
-// every street gets the lane (or lanes) that keep moving cars off the parked ones:
-// wide enough for two clear lanes -> two-way; otherwise one clear lane -> one-way; otherwise no traffic at all
-const laneStats = { two: 0, one: 0, none: 0 };
-(function fitLanes() {
-  const PG = new Map(), PC = 8, pk = (ix, iy) => ix * 100003 + iy;
-  for (const p of parked) { const k = pk(Math.floor(p.x / PC), Math.floor(p.y / PC)); let l = PG.get(k); if (!l) PG.set(k, l = []); l.push(p); }
-  const W = 0.9, M = 0.2;
-  for (const r of driveRoads) {
-    const seen = new Set(), obs = [];
-    for (let s = 0; s <= r.len; s += 4) {
-      const [x, y, a] = along(r, s), ca = Math.cos(a), sa = Math.sin(a);
-      const R = r.hw + 3, x0 = Math.floor((x - R) / PC), x1 = Math.floor((x + R) / PC), y0 = Math.floor((y - R) / PC), y1 = Math.floor((y + R) / PC);
-      for (let ix = x0; ix <= x1; ix++) for (let iy = y0; iy <= y1; iy++) {
-        const l = PG.get(pk(ix, iy)); if (!l) continue;
-        for (const p of l) {
-          if (seen.has(p)) continue;
-          const dx = p.x - x, dy = p.y - y, t = dx * ca + dy * sa, d = dx * sa - dy * ca;
-          const hl = p.hl || 0.95, cr = p.cr || 0.85, da = p.a - a;
-          if (Math.abs(t) > 2.2 + Math.abs(Math.cos(da)) * hl || Math.abs(d) > r.hw + 2.5) continue;
-          seen.add(p); obs.push([d, Math.abs(Math.sin(da)) * hl + cr]);
-        }
-      }
-    }
-    const lim = r.hw - 0.95;
-    const clear = (L) => Math.abs(L) <= lim + 1e-6 && obs.every(([d, e]) => Math.abs(d - L) >= e + W + M);
-    const L0 = Math.min(2.2, r.hw * 0.45);
-    let best = null;
-    for (let k = 0; k <= 40; k++) for (const L of [L0 - k * 0.05, L0 + k * 0.05]) if (best === null && L >= 1.2 && clear(L) && clear(-L)) best = L;
-    if (best !== null) { r.lane = best; r.oneWay = 0; laneStats.two++; continue; }
-    for (let k = 0; k <= 80 && best === null; k++) for (const L of [k * 0.05, -k * 0.05]) if (best === null && clear(L)) best = L;
-    if (best !== null) { r.lane = best; r.oneWay = hash(r.pts[0][0] * 0.37 + r.pts[0][1] * 1.13) < 0.5 ? 1 : -1; laneStats.one++; continue; }
-    r.noTraffic = true; laneStats.none++;
-  }
-  for (let i = driveRoads.length - 1; i >= 0; i--) if (driveRoads[i].noTraffic) driveRoads.splice(i, 1);
-})();
-// where streets meet: road ends, so a car reaching the end of one street turns into the next
-const ROAD_ENDS = new Map(), rek = (x, y) => Math.round(x / 5) * 100003 + Math.round(y / 5);
-for (const r of driveRoads) for (const e of [0, 1]) {
-  const q = e ? r.pts[r.pts.length - 1] : r.pts[0], k = rek(q[0], q[1]);
-  let l = ROAD_ENDS.get(k); if (!l) ROAD_ENDS.set(k, l = []); l.push({ r, e, x: q[0], y: q[1] });
-}
-function laneAt(r, s, dir) {
-  const [x0, y0, a0] = along(r, s), fa = dir > 0 ? a0 : a0 + Math.PI, L = r.oneWay ? r.lane * dir : r.lane;
-  return [x0 + Math.sin(fa) * L, y0 - Math.cos(fa) * L, fa];
-}
-function trafficTurn(c, over) {
-  const r = c.road, atEnd = c.dir > 0, q = atEnd ? r.pts[r.pts.length - 1] : r.pts[0];
-  const [, , a0] = along(r, atEnd ? r.len : 0), inA = atEnd ? a0 : a0 + Math.PI;
-  const opts = [];
-  for (let ix = -1; ix <= 1; ix++) for (let iy = -1; iy <= 1; iy++) {
-    const l = ROAD_ENDS.get(rek(q[0], q[1]) + ix * 100003 + iy); if (!l) continue;
-    for (const o of l) {
-      if (o.r === r || Math.hypot(o.x - q[0], o.y - q[1]) > 4.5) continue;
-      const dir = o.e ? -1 : 1;
-      if (o.r.oneWay && o.r.oneWay !== dir) continue;
-      const [, , b0] = along(o.r, o.e ? o.r.len : 0), outA = dir > 0 ? b0 : b0 + Math.PI;
-      if (Math.abs(angDiff(inA, outA)) > 2.4) continue;
-      opts.push([o.r, dir]);
-    }
-  }
-  if (!opts.length) return 0;
-  // only into a street whose first few metres are free
-  const free = opts.filter(([nr, nd]) => !traffic.some((o) => o !== c && o.road === nr && o.state === 'drive' && Math.abs(o.s - (nd > 0 ? 0 : nr.len)) < 7.5));
-  if (!free.length) return -1;
-  const [nr, nd] = pick(free);
-  c.road = nr; c.dir = nd; c.s = nd > 0 ? Math.min(over, nr.len) : Math.max(0, nr.len - over);
-  return 1;
-}
 function along(r, s) {
   s = clamp(s, 0, r.len);
   let j = 1;
@@ -5394,7 +5326,7 @@ function placePed(p, near) {
     const d = Math.hypot(x - near.x, y - near.y);
     if ((d < 25 && t < 60) || d > 160) continue;
     p.road = r; p.s = s; p.dir = Math.random() < 0.5 ? 1 : -1; p.off = rand(-0.6, 0.6) * Math.min(2.2, r.hw);
-    p.x = x; p.y = y; p.state = 'walk'; p.cx2 = p.cy2 = 0;
+    p.x = x; p.y = y; p.state = 'walk';
     return true;
   }
   if (!p.road) { p.road = walkRoads[0]; p.s = 0; p.dir = 1; p.off = 0; p.state = 'walk'; }
@@ -5426,8 +5358,7 @@ function placeCar(c, near) {
     if (!inPlay(x, y)) continue;
     const d = Math.hypot(x - near.x, y - near.y);
     if ((d < 45 && t < 60) || d > 240) continue;
-    if (traffic.some((o) => o !== c && o.state === 'drive' && Math.abs(o.x - x) < 9 && Math.abs(o.y - y) < 9)) continue;
-    c.road = r; c.s = s; c.dir = r.oneWay || (Math.random() < 0.5 ? 1 : -1); c.x = x; c.y = y; c.state = 'drive'; c.jx = c.jy = c.ja = 0; c.stuckT = 0;
+    c.road = r; c.s = s; c.dir = Math.random() < 0.5 ? 1 : -1; c.x = x; c.y = y; c.state = 'drive';
     return true;
   }
   return false;
@@ -6347,96 +6278,6 @@ function driveCar(v, dt, speedBefore) {
     }
   }
 }
-// ------------------------------------------------------------------ solid things
-function vehDims(kind) { const S = VSPEC[kind] || {}, m = MODELS[kind]; return S.two ? [0.95, 0.38] : m && m.len ? [m.len / 2, m.wid / 2] : [2.0, 0.85]; }
-// every vehicle standing or moving in the street, as an oriented box: centre, heading, half length, half width
-function eachVehicle(fn) {
-  for (const c of traffic) if (c.state === 'drive') { const d = c.dims || (c.dims = vehDims(c.kind)); fn(c.x, c.y, c.a, d[0], d[1], c); }
-  for (const v of vespas) if (!v.tipped) { const d = v.dims || (v.dims = vehDims(v.kind)); fn(v.x, v.y, v.heading, d[0], d[1], v); }
-  for (const u of police.units) if (u.car.visible) fn(u.cx, u.cy, u.ca, 2.15, 0.9, u);
-}
-// pushes the circle (o.x, o.y, r) out of an oriented box, the short way
-function boxOut(o, r, cx, cy, a, hl, hw) {
-  const ca = Math.cos(a), sa = Math.sin(a), dx = o.x - cx, dy = o.y - cy;
-  const lx = dx * ca + dy * sa, ly = dy * ca - dx * sa;
-  const px = hl + r - Math.abs(lx), py = hw + r - Math.abs(ly);
-  if (px <= 0 || py <= 0) return false;
-  if (py < px) { const ny = (ly >= 0 ? 1 : -1) * (hw + r); o.x = cx + lx * ca - ny * sa; o.y = cy + lx * sa + ny * ca; }
-  else { const nx = (lx >= 0 ? 1 : -1) * (hl + r); o.x = cx + nx * ca - ly * sa; o.y = cy + nx * sa + ly * ca; }
-  return true;
-}
-// people never overlap: each other, the player, the officers, other players, cars, scooters, parked cars, walls
-const CROWD_SKIP = { fly: 1, down: 1, shop: 1 };
-const PED_GAP = 0.62;
-function crowd(dt) {
-  const A = [];
-  for (const p of peds) if (!CROWD_SKIP[p.state]) { p._ox = p.x; p._oy = p.y; A.push(p); }
-  if (!A.length) return;
-  // someone walking into something steps around it, to the side it's already on
-  const sidestep = (p, fx, fy) => {
-    if (!p.moving) return;
-    const hx = Math.cos(p.a), hy = Math.sin(p.a), dx = p.x - fx, dy = p.y - fy;
-    if (dx * hx + dy * hy > 0.05) return;
-    const side = hx * dy - hy * dx >= 0 ? 1 : -1, st = 1.5 * dt;
-    p.x -= hy * side * st; p.y += hx * side * st;
-  };
-  const circle = (p, x, y, m, who) => {
-    const dx = p.x - x, dy = p.y - y;
-    if (Math.abs(dx) >= m || Math.abs(dy) >= m) return;
-    const d = Math.hypot(dx, dy); if (d >= m) return;
-    const nx = d > 1e-4 ? dx / d : 1, ny = d > 1e-4 ? dy / d : 0;
-    p.x = x + nx * m; p.y = y + ny * m; if (who) sidestep(p, x, y);
-  };
-  for (let i = 0; i < A.length; i++) {
-    const a = A[i];
-    for (let j = i + 1; j < A.length; j++) {
-      const b = A[j], dx = b.x - a.x, dy = b.y - a.y;
-      if (Math.abs(dx) >= PED_GAP || Math.abs(dy) >= PED_GAP) continue;
-      const d = Math.hypot(dx, dy); if (d >= PED_GAP) continue;
-      const nx = d > 1e-4 ? dx / d : 1, ny = d > 1e-4 ? dy / d : 0, pen = PED_GAP - d;
-      const wa = a.moving ? (b.moving ? 0.5 : 1) : (b.moving ? 0 : 0.5);
-      a.x -= nx * pen * wa; a.y -= ny * pen * wa; b.x += nx * pen * (1 - wa); b.y += ny * pen * (1 - wa);
-      sidestep(a, b.x, b.y); sidestep(b, a.x, a.y);
-    }
-  }
-  const onFoot = !player.fly && !player.vespa && !player.inCar;
-  const others = []; if (RETE && RETE.mapDots) RETE.mapDots((r) => others.push(r));
-  const cops = []; for (const u of police.units) for (const o of u.officers) if (o.mesh.visible && o.state !== 'car') cops.push(o);
-  for (const p of A) {
-    if (onFoot && p.moving) circle(p, player.x, player.y, 0.68, true);
-    for (const o of cops) circle(p, o.x, o.y, PED_GAP, true);
-    for (const r of others) circle(p, r.x, r.y, 0.66, true);
-  }
-  // people walking in the street step to the side to let a car by
-  for (const c of traffic) {
-    if (c.state !== 'drive') continue;
-    const ca = Math.cos(c.a), sa = Math.sin(c.a);
-    for (const p of A) {
-      if (p.state !== 'walk') continue;
-      const dx = p.x - c.x, dy = p.y - c.y; if (Math.abs(dx) > 11 || Math.abs(dy) > 11) continue;
-      const f = dx * ca + dy * sa; if (f < -2.6 || f > 9.5) continue;
-      const lat = dy * ca - dx * sa; if (Math.abs(lat) > 1.6) continue;
-      const sd = lat >= 0 ? 1 : -1, st = 1.7 * dt;
-      p.x -= sa * sd * st; p.y += ca * sd * st;
-    }
-  }
-  eachVehicle((cx, cy, a, hl, hw) => {
-    const R = hl + 0.5;
-    for (const p of A) if (Math.abs(p.x - cx) < R && Math.abs(p.y - cy) < R && boxOut(p, 0.3, cx, cy, a, hl, hw)) sidestep(p, cx, cy);
-  });
-  for (const p of A) {
-    resolveProps(p, 0.3);
-    if (p.state !== 'walk') p.cx2 = p.cy2 = 0;
-    if (p.x === p._ox && p.y === p._oy) continue;
-    Pv.x = p.x; Pv.y = p.y; resolve(Pv, 0.3); p.x = Pv.x; p.y = Pv.y;
-    if (p.state === 'walk') {
-      // walkers follow their street line, so the push is kept as an offset that fades once they're past
-      p.cx2 = (p.cx2 || 0) + p.x - p._ox; p.cy2 = (p.cy2 || 0) + p.y - p._oy;
-      if (p.cx2 * p.cx2 + p.cy2 * p.cy2 > 5) { p.dir *= -1; p.cx2 *= 0.5; p.cy2 *= 0.5; }
-    } else if (p.state === 'hang' && p.home) p.home = [p.x, p.y];
-    p.mesh.position.x = p.x; p.mesh.position.z = -p.y;
-  }
-}
 // ------------------------------------------------------------------ update
 const Pv = { x: 0, y: 0 };
 function updatePlayer(dt) {
@@ -6475,9 +6316,6 @@ function updatePlayer(dt) {
   Pv.x = player.x; Pv.y = player.y;
   resolve(Pv, 0.42);
   resolveProps(Pv, 0.42);
-  let boxed = false;
-  eachVehicle((cx, cy, a, hl, hw) => { if (Math.abs(Pv.x - cx) < hl + 1 && Math.abs(Pv.y - cy) < hl + 1 && boxOut(Pv, 0.4, cx, cy, a, hl, hw)) boxed = true; });
-  if (boxed) resolve(Pv, 0.42);
   player.x = clamp(Pv.x, PLAY[0], PLAY[2]); player.y = clamp(Pv.y, PLAY[1], PLAY[3]);
   const pushing = STORE && STORE.cart.held;
   if (pushing) STORE.updateCart();
@@ -6693,61 +6531,21 @@ function updateTraffic(dt) {
     // look ahead for the player / arancina
     const [x0, y0, a0] = along(c.road, c.s);
     const fa = c.dir > 0 ? a0 : a0 + Math.PI;
-    const lane = c.road.oneWay ? c.road.lane * c.dir : (c.road.lane ?? Math.min(2.2, c.road.hw * 0.45));
+    const lane = Math.min(2.2, c.road.hw * 0.45);
     const ox = Math.sin(fa) * lane, oy = -Math.cos(fa) * lane;
-    const fca = Math.cos(fa), fsa = Math.sin(fa), lx = x0 + ox, ly = y0 + oy;
-    const aheadX = lx + fca * 5, aheadY = ly + fsa * 5;
-    // is (x, y) in the strip of road just in front of this car?
-    const inPath = (x, y, w, f1) => { const dx = x - lx, dy = y - ly, f = dx * fca + dy * fsa; return f > 0.6 && f < f1 && Math.abs(dy * fca - dx * fsa) < w; };
-    let blocked = !player.fly && !player.vespa && inPath(player.x, player.y, 1.5, 6.5), byPed = false;
-    if (blocked) c.why = 'player';
-    if (aran.active && !player.carry && Math.hypot(aran.x - aheadX, aran.y - aheadY) < aran.D / 2 + 3) blocked = true, c.why = 'aran';
-    if (!blocked) for (const o of traffic) if (o !== c && o.state === 'drive' && inPath(o.x, o.y, 1.9, 7.8)) { blocked = true; c.why = 'car'; break; }
-    if (!blocked) for (const v of vespas) if (!v.tipped && inPath(v.x, v.y, v.spec.car ? 1.9 : 1.4, 7.5)) { blocked = true; c.why = 'vehicle'; break; }
-    if (police.blocks(aheadX, aheadY, 3.6) || c.hold) blocked = true, c.why = 'police';
-    // parked cars only along this street (its lane was chosen to clear them; this catches ones parked since)
-    const rest = (c.dir > 0 ? c.road.len - c.s : c.s) + 0.5;
-    if (!blocked) propsNear(aheadX, aheadY, 4, (o) => {
-      if (o.static || !o.alive || blocked) return;
-      const f = (o.x - lx) * fca + (o.y - ly) * fsa;
-      if (f < 0.6 || f > Math.min(rest, 6.5 + (o.hl || 0.95))) return;
-      // measured across the lane where it is, so a bend in the street doesn't fool it
-      const [qx, qy, qa] = laneAt(c.road, c.s + c.dir * f, c.dir);
-      if (Math.abs((o.y - qy) * Math.cos(qa) - (o.x - qx) * Math.sin(qa)) < 0.95 + (o.cr || 0.85)) blocked = true, c.why = 'parked';
-    });
-    if (!blocked) for (const p of peds) if (p.state !== 'fly' && p.state !== 'down' && p.state !== 'shop' && inPath(p.x, p.y, 1.35, 5.8)) { blocked = byPed = true; c.why = 'ped'; break; }
-    // stuck behind people standing in the road: creep forward, they step aside
-    c.stuckT = blocked && c.speed < 0.6 ? (c.stuckT || 0) + dt : 0;
-    const creep = byPed && c.stuckT > 4;
-    c.speed = lerp(c.speed, creep ? 1.1 : blocked ? 0 : c.v, Math.min(1, dt * (blocked && !creep ? 5 : 1.2)));
-    if (c.stuckT > 10 && Math.hypot(player.x - c.x, player.y - c.y) > 45) { placeCar(c, player); continue; }
-    // a car left in the road: give up and turn round
-    if (c.stuckT > 8 && (c.why === 'parked' || c.why === 'vehicle')) {
-      c.dir *= -1; c.stuckT = 0;
-      const [nx, ny, na] = laneAt(c.road, c.s, c.dir);
-      c.jx = (c.jx || 0) + lx - nx; c.jy = (c.jy || 0) + ly - ny; c.ja = (c.ja || 0) + angDiff(na, fa);
-      continue;
-    }
+    const aheadX = x0 + Math.cos(fa) * 5, aheadY = y0 + Math.sin(fa) * 5;
+    let blocked = Math.hypot(player.x - aheadX, player.y - aheadY) < 4.2 && !player.fly;
+    if (aran.active && !player.carry && Math.hypot(aran.x - aheadX, aran.y - aheadY) < aran.D / 2 + 3) blocked = true;
+    for (const o of traffic) if (o !== c && o.state === 'drive' && Math.hypot(o.x - aheadX, o.y - aheadY) < 3.2) blocked = true;
+    if (police.blocks(aheadX, aheadY, 3.6) || c.hold) blocked = true;
+    if (!blocked) for (const p of peds) if (p.state === 'walk' && Math.abs(p.x - aheadX) < 3.2 && Math.abs(p.y - aheadY) < 3.2 && Math.hypot(p.x - aheadX, p.y - aheadY) < 3.2) { blocked = true; break; }
+    c.speed = lerp(c.speed, blocked ? 0 : c.v, Math.min(1, dt * (blocked ? 5 : 1.2)));
     if (blocked) { c.honk -= dt; if (c.honk <= 0 && Math.hypot(player.x - c.x, player.y - c.y) < 12) { sfx.carHorn(); c.honk = 2.5; } }
     c.s += c.speed * c.dir * dt;
-    if (c.s < 0 || c.s > c.road.len) {
-      // end of the street: turn into the next one; a dead end far from anyone respawns, near the player a U-turn
-      const over = c.s < 0 ? -c.s : c.s - c.road.len, turn = trafficTurn(c, over);
-      if (turn < 0) { c.s = clamp(c.s, 0, c.road.len); c.speed = 0; c.x = lx; c.y = ly; c.a = fa; } // wait for the way to clear
-      else {
-        if (!turn) {
-          if (Math.hypot(player.x - lx, player.y - ly) > 70) { placeCar(c, player); continue; }
-          c.dir *= -1; c.s = clamp(c.s, 0, c.road.len);
-        }
-        const [nx, ny, na] = laneAt(c.road, c.s, c.dir);
-        // the model glides from where it was instead of jumping
-        c.jx = (c.jx || 0) + lx - nx; c.jy = (c.jy || 0) + ly - ny; c.ja = (c.ja || 0) + angDiff(na, fa);
-        c.x = nx; c.y = ny; c.a = na;
-      }
-    } else { c.x = lx; c.y = ly; c.a = fa; }
-    if (c.jx || c.jy || c.ja) { const k = Math.pow(0.003, dt); c.jx *= k; c.jy *= k; c.ja *= k; if (Math.abs(c.jx) + Math.abs(c.jy) + Math.abs(c.ja) < 0.01) c.jx = c.jy = c.ja = 0; }
-    c.mesh.position.set(c.x + (c.jx || 0), 0, -(c.y + (c.jy || 0)));
-    c.mesh.rotation.set(0, c.a + (c.ja || 0), 0);
+    if (c.s < 0 || c.s > c.road.len) { c.dir *= -1; c.s = clamp(c.s, 0, c.road.len); }
+    c.x = x0 + ox; c.y = y0 + oy; c.a = fa;
+    c.mesh.position.set(c.x, 0, -c.y);
+    c.mesh.rotation.set(0, c.a, 0);
     // hits
     const dp = Math.hypot(player.x - c.x, player.y - c.y);
     if (dp < 2.0 && !player.fly && !(player.vespa && player.vespa.spec.car)) {
@@ -6843,11 +6641,6 @@ function updateHints() {
   }
   hint('');
 }
-// where you are, when Giorgio's wide shot puts a roof between you and the camera
-const youMark = document.createElement('div');
-youMark.hidden = true; youMark.textContent = 'YOU';
-youMark.style.cssText = 'position:fixed;z-index:6;pointer-events:none;transform:translate(-50%,-100%);font:800 11px/1 system-ui,sans-serif;letter-spacing:.08em;color:#fff;background:#d9558f;padding:4px 7px 5px;border-radius:9px;box-shadow:0 2px 8px rgba(0,0,0,.35)';
-document.body.appendChild(youMark);
 function updateCamera(dt) {
   let tx, ty, th, heading;
   if (player.vespa) { tx = player.vespa.x; ty = player.vespa.y; th = player.vespa.spec.car ? 2.1 : 1.6; heading = player.vespa.heading; }
@@ -6856,54 +6649,18 @@ function updateCamera(dt) {
   const big = aran.active && !player.carry ? aran.D : 0;
   const base = player.vespa ? Math.max(player.vespa.spec.cam || 10, cam.dist) : player.inCar ? 12 : cam.dist;
   const inRest = !!(GIO && GIO.inside()), indoor = STORE && STORE.inside && !inRest;
-  // a giant Giorgio nearby: back off far enough that both you and all of him fit in the shot, more the bigger he gets
-  const gi = GIO && !inRest && !indoor && GIO.mapInfo ? GIO.mapInfo().giant : null;
-  let gf = 0, wantG = 0;
-  if (gi) {
-    cam.gs = cam.gs ? lerp(cam.gs, gi.s, Math.min(1, dt * 1.2)) : gi.s;
-    cam.gx = gi.x; cam.gy = gi.y;
-    const H = cam.gs * 2.1, dG = Math.hypot(gi.x - tx, gi.y - ty);
-    gf = cam.gs > 3 ? clamp(1.4 - dG / (H * 2.2 + 50), 0, 1) : 0;
-    // shortest distance at which the player's feet and the top of his head both fit the 55 degree view
-    for (let D = 9; D < 175; D *= 1.07) {
-      const ch = Math.max(th + Math.tan(0.3) * D, cam.gs >= 13 ? 28 : 0); // up over the roofs if a building is in the way
-      wantG = D / Math.cos(0.3);
-      if (Math.atan2(ch, D) + Math.atan2(H * 1.08 - ch, D + dG) < 0.7) break; // the top of the screen is HUD
-    }
-    if (cam.gs >= 13) wantG = Math.max(wantG, 36);
-  }
-  cam.gf = lerp(cam.gf || 0, gf, Math.min(1, dt * (gf > (cam.gf || 0) ? 1.0 : 0.6)));
-  if (!gi && cam.gf < 0.01) { cam.gs = 0; wantG = 0; }
-  if (!gi) wantG = cam.wantG || 0; else cam.wantG = wantG;
-  let want = inRest ? 9 : indoor ? Math.min(6.0, cam.dist) : Math.max(base, big * 1.25 + 6);
-  if (cam.gf > 0.001) want = Math.max(want, lerp(want, Math.min(175, wantG), cam.gf));
-  scene.fog.near = 150 + cam.gf * 170; scene.fog.far = 620 + cam.gf * 560;
+  const want = inRest ? 9 : indoor ? Math.min(6.0, cam.dist) : Math.max(base, big * 1.25 + 6);
   cam.tx = lerp(cam.tx, tx, Math.min(1, dt * 8)); cam.ty = lerp(cam.ty, ty, Math.min(1, dt * 8)); cam.th = lerp(cam.th, th + big * 0.15, Math.min(1, dt * 4));
   // auto-follow behind the direction of travel
   const moving = player.vespa ? Math.abs(player.vespa.speed) > 1.5 : player.speed > 1;
   if (moving && clock.elapsedTime - cam.lastDrag > 1.4) {
     cam.yaw += angDiff(cam.yaw, heading) * Math.min(1, dt * (player.vespa ? 2.2 : 1.1));
-  } else if (cam.gf > 0.3 && clock.elapsedTime - cam.lastDrag > 2.5) {
-    // standing still near him: turn so he's in the shot
-    cam.yaw += angDiff(cam.yaw, Math.atan2(cam.gy - ty, cam.gx - tx)) * Math.min(1, dt * 0.9 * cam.gf);
   }
-  let pitch = inRest ? 0.95 : indoor ? Math.min(0.42, cam.pitch) : cam.pitch + (big > 4 ? 0.2 : 0);
-  if (cam.gf > 0.001) pitch = lerp(pitch, 0.3, cam.gf);
-  let horiz = Math.cos(pitch) * want;
-  let offX = -Math.cos(cam.yaw) * horiz, offY = -Math.sin(cam.yaw) * horiz;
-  let camH = cam.th + Math.sin(pitch) * want;
-  let t = rayWalls(cam.tx, cam.ty, cam.th, cam.tx + offX, cam.ty + offY, camH);
-  // with Giorgio around, a building in the way lifts the camera over the roofs and keeps the wide shot;
-  // if a roof then hides you, a marker shows where you are
-  if (cam.gf > 0.05) {
-    const needUp = t < 0.97 && want > 30 ? Math.max(0, Math.asin(clamp((28 - cam.th) / want, 0, 0.84)) - pitch) : 0;
-    cam.gp = lerp(cam.gp || 0, needUp * cam.gf, Math.min(1, dt * (needUp * cam.gf > (cam.gp || 0) ? 4 : 0.7)));
-    const pt = pitch + cam.gp;
-    horiz = Math.cos(pt) * want; offX = -Math.cos(cam.yaw) * horiz; offY = -Math.sin(cam.yaw) * horiz; camH = cam.th + Math.sin(pt) * want;
-    t = rayWalls(cam.tx, cam.ty, cam.th, cam.tx + offX, cam.ty + offY, camH);
-    cam.occl = t < 0.97;
-    if (camH > 25) t = 1;
-  } else { cam.gp = 0; cam.occl = false; }
+  const pitch = inRest ? 0.95 : indoor ? Math.min(0.42, cam.pitch) : cam.pitch + (big > 4 ? 0.2 : 0);
+  const horiz = Math.cos(pitch) * want;
+  const offX = -Math.cos(cam.yaw) * horiz, offY = -Math.sin(cam.yaw) * horiz;
+  const camH = cam.th + Math.sin(pitch) * want;
+  const t = rayWalls(cam.tx, cam.ty, cam.th, cam.tx + offX, cam.ty + offY, camH);
   const dNow = t < 1 ? Math.max(indoor ? 0.35 : 1.0, t * want - 0.6) : want;
   cam.distNow = dNow < cam.distNow ? lerp(cam.distNow, dNow, Math.min(1, dt * 14)) : lerp(cam.distNow, dNow, Math.min(1, dt * 2.5));
   const k = cam.distNow / want;
@@ -6920,16 +6677,7 @@ function updateCamera(dt) {
   if (cam.shake > 0) { cam.shake = Math.max(0, cam.shake - dt * 1.6); Pv.x += (Math.random() - 0.5) * cam.shake; Pv.y += (Math.random() - 0.5) * cam.shake; }
   camera.position.set(Pv.x, cy + (cam.shake > 0 ? (Math.random() - 0.5) * cam.shake * 0.6 : 0), -Pv.y);
   player.mesh.visible = cam.distNow > 0.9 && !player.inCar && !(player.vespa && player.vespa.spec.car);
-  if (cam.gf > 0.01 && cam.gs) {
-    // aim between your feet and the top of his head, his head a little below the HUD at the top
-    const P = camera.position, dP = Math.max(1, Math.hypot(cam.tx - P.x, -cam.ty - P.z)), dG = Math.max(1, Math.hypot(cam.gx - P.x, -cam.gy - P.z));
-    const aP = Math.atan2(0.1 - P.y, dP), aG = Math.atan2(cam.gs * 2.1 - P.y, dG);
-    const mid = (aP + aG) / 2 + 0.08, ly = lerp(cam.th, P.y + Math.tan(mid) * dP, cam.gf);
-    camera.lookAt(cam.tx, ly, -cam.ty);
-  } else camera.lookAt(cam.tx, cam.th, -cam.ty);
-  const ym = project(player.x, player.y, 2.3), showYou = cam.gf > 0.4 && cam.occl && ym && ym[1] > 0 && ym[1] < innerHeight;
-  if (youMark.hidden === !!showYou) youMark.hidden = !showYou;
-  if (showYou) { youMark.style.left = ym[0] + 'px'; youMark.style.top = ym[1] + 'px'; }
+  camera.lookAt(cam.tx, cam.th, -cam.ty);
   sun.position.set(cam.tx + SUN_OFF.x, SUN_OFF.y, -cam.ty + SUN_OFF.z);
   sun.target.position.set(cam.tx, 0, -cam.ty);
   scene.userData.sky.position.copy(camera.position);
@@ -7069,7 +6817,6 @@ function afterSocial(p) {
   resumeWalk(p);
 }
 function resumeWalk(p) {
-  p.cx2 = p.cy2 = 0;
   if (!p.road || !p.road.cum) { placePed(p, player); return; }
   const pr = projectOnRoad(p.road, p.x, p.y);
   const [rx, ry, ra] = along(p.road, pr.s);
@@ -7269,7 +7016,6 @@ function updatePeds(dt) {
         if (p.s < 0 || p.s > p.road.len) { p.dir *= -1; p.s = clamp(p.s, 0, p.road.len); }
         const [x, y, a] = along(p.road, p.s);
         p.x = x - Math.sin(a) * p.off; p.y = y + Math.cos(a) * p.off;
-        if (p.cx2 || p.cy2) { const k = Math.pow(0.35, dt); p.cx2 *= k; p.cy2 *= k; if (Math.abs(p.cx2) + Math.abs(p.cy2) < 0.003) p.cx2 = p.cy2 = 0; p.x += p.cx2; p.y += p.cy2; }
         p.a = p.dir > 0 ? a : a + Math.PI;
         p.phase += p.speed * dt * 2.6; p.moving = true;
         if (!player.fly) {
@@ -7353,7 +7099,6 @@ function updatePeds(dt) {
     if (p.moving || !p.pose) animatePerson(p.mesh, p.phase, p.state === 'flee' ? 0.9 : p.moving ? 0.5 : 0, p.cart && p.state === 'shop' ? -1.2 : 0);
     else posePerson(p.mesh, p.pose, p.poseT, p.danceSeed || (p.seed || 0));
   }
-  crowd(dt);
 }
 
 // ---- characters from the Character studio, living in the Kalsa
@@ -9068,7 +8813,7 @@ startBtn.addEventListener('click', () => {
   objective();
   toast('Benvenuto nella Kalsa', isTouch ? 'roam free · quests are in the menu' : 'roam free · quests are in the menu (Esc)', 2600);
 });
-window.__kalsa = { laneStats, driveRoads, eachVehicle, crowd, GIO: () => GIO, questTarget, perf, post, LOD_PEOPLE, personLod, PAD, padPanel: () => { try { const p = padPanel(); return p && p.id; } catch (e) { return String(e); } }, game, cam, CORSA: () => CORSA, RACE, makeVehicleMesh, makePoliceCar, CAOS, VITA, CITTA, RETE, BOOT, FAC, renderer, cityMat, clock, launchPed, launchPlayer, dispatch, afterSocial, SPECIALS, LM, streamAround, rebuildNear, CHUNKS, stream, spawnVehicle, takeParked, nearestRide, parked, MODELS, VSPEC, gps, setWaypoint, clearWaypoint, openMap, closeMap, bigMap, drawBigMap, LOTS, player, game, aran, cam, camera, sfx, vespas, FRIG, ZIA, scene, renderer, peds, traffic, nearestRoadDir, tick, keys, stats, roads, STORE, convos, talk, openTalk, talkOption, closeTalk, nearestTalkable, roster, syncRoster, studio, openStudio, closeStudio, rebuildPreview, openMenu, closeMenu, resetAll, records, posePerson, makePerson, fullLook, presetLook, setPlayerLook, encodeLook, decodeLook, startConvo, press: (k) => { if (k === 'E') actPressed = true; }, police, wallet, reportCrime, startThief, vips, addMoney, CG: () => CG, WG: () => WG, routeOn, surrender: () => respawnAfterArrest() };
+window.__kalsa = { GIO: () => GIO, questTarget, perf, post, LOD_PEOPLE, personLod, PAD, padPanel: () => { try { const p = padPanel(); return p && p.id; } catch (e) { return String(e); } }, game, cam, CORSA: () => CORSA, RACE, makeVehicleMesh, makePoliceCar, CAOS, VITA, CITTA, RETE, BOOT, FAC, renderer, cityMat, clock, launchPed, launchPlayer, dispatch, afterSocial, SPECIALS, LM, streamAround, rebuildNear, CHUNKS, stream, spawnVehicle, takeParked, nearestRide, parked, MODELS, VSPEC, gps, setWaypoint, clearWaypoint, openMap, closeMap, bigMap, drawBigMap, LOTS, player, game, aran, cam, camera, sfx, vespas, FRIG, ZIA, scene, renderer, peds, traffic, nearestRoadDir, tick, keys, stats, roads, STORE, convos, talk, openTalk, talkOption, closeTalk, nearestTalkable, roster, syncRoster, studio, openStudio, closeStudio, rebuildPreview, openMenu, closeMenu, resetAll, records, posePerson, makePerson, fullLook, presetLook, setPlayerLook, encodeLook, decodeLook, startConvo, press: (k) => { if (k === 'E') actPressed = true; }, police, wallet, reportCrime, startThief, vips, addMoney, CG: () => CG, WG: () => WG, routeOn, surrender: () => respawnAfterArrest() };
 
 </script>
 
