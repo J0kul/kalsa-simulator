@@ -6204,10 +6204,13 @@ function exitSpot(v) {
   const tries = [[h + Math.PI / 2, side], [h - Math.PI / 2, side], [h + Math.PI, (v.spec.hl || 0.5) + 1.9], [h, (v.spec.hl || 0.5) + 1.9]];
   for (const [ang, d] of tries) {
     const x = v.x + Math.cos(ang) * d, y = v.y + Math.sin(ang) * d;
+    if (wallBetween(v.x, v.y, x, y)) continue;
     Pv.x = x; Pv.y = y; const r = resolve(Pv, 0.42);
-    if (!r.hit || r.pen < 0.1) return [Pv.x, Pv.y];
+    if ((!r.hit || r.pen < 0.1) && !wallBetween(v.x, v.y, Pv.x, Pv.y) && !insideFoot(Pv.x, Pv.y)) return [Pv.x, Pv.y];
   }
-  return [v.x + Math.cos(h + Math.PI / 2) * side, v.y + Math.sin(h + Math.PI / 2) * side];
+  // no room anywhere around it: step out right where the vehicle is
+  Pv.x = v.x; Pv.y = v.y; resolve(Pv, 0.42);
+  return outOfBuildings(Pv.x, Pv.y) || [Pv.x, Pv.y];
 }
 function dismount(forced) {
   const v = player.vespa; if (!v) return;
@@ -6278,6 +6281,96 @@ function driveCar(v, dt, speedBefore) {
     }
   }
 }
+// ------------------------------------------------------------------ building footprints: nobody belongs inside one
+const FOOT_CELL = 16, footGrid = new Map(), fk = (ix, iy) => ix * 100003 + iy;
+function addFoot(pts, inner) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of pts) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); }
+  const f = { pts, inner };
+  for (let ix = Math.floor(x0 / FOOT_CELL); ix <= Math.floor(x1 / FOOT_CELL); ix++) for (let iy = Math.floor(y0 / FOOT_CELL); iy <= Math.floor(y1 / FOOT_CELL); iy++) {
+    let l = footGrid.get(fk(ix, iy)); if (!l) footGrid.set(fk(ix, iy), l = []); l.push(f);
+  }
+}
+for (const L of LOTS) if (L) addFoot(L.pts);
+for (const S of SPECIALS) if (S) addFoot(S.pts, S.inner && S.inner.length > 2 ? S.inner : null);
+if (QC) for (const c of QC.corners) addFoot(c.poly);
+// distance from (x, y) to the edge of a ring, and the nearest point on it
+function ringEdge(x, y, pts) {
+  let best = Infinity, bx = x, by = y;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const ax = pts[j][0], ay = pts[j][1], dx = pts[i][0] - ax, dy = pts[i][1] - ay, L2 = dx * dx + dy * dy || 1e-9;
+    const t = clamp(((x - ax) * dx + (y - ay) * dy) / L2, 0, 1), qx = ax + dx * t, qy = ay + dy * t, d = Math.hypot(x - qx, y - qy);
+    if (d < best) { best = d; bx = qx; by = qy; }
+  }
+  return [best, bx, by];
+}
+// the building footprint (x, y) is properly inside of (deeper than `depth`), or null
+function insideFoot(x, y, depth = 0) {
+  const l = footGrid.get(fk(Math.floor(x / FOOT_CELL), Math.floor(y / FOOT_CELL)));
+  if (!l) return null;
+  for (const f of l) {
+    if (!pip(x, y, f.pts) || (f.inner && pip(x, y, f.inner))) continue;
+    if (depth > 0 && ringEdge(x, y, f.pts)[0] < depth) continue;
+    return f;
+  }
+  return null;
+}
+// the closest spot out in the street from inside a building
+function outOfBuildings(x, y, r = 0.45) {
+  for (let k = 0; k < 6; k++) {
+    const f = insideFoot(x, y);
+    if (!f) { Pv.x = x; Pv.y = y; resolve(Pv, r); if (!insideFoot(Pv.x, Pv.y)) return [Pv.x, Pv.y]; x = Pv.x; y = Pv.y; continue; }
+    const [d, qx, qy] = ringEdge(x, y, f.pts), dl = Math.max(d, 1e-3);
+    x = qx + (qx - x) / dl * (r + 0.3); y = qy + (qy - y) / dl * (r + 0.3);
+  }
+  // wedged between buildings: the nearest bit of street instead
+  let best = null, bd = 400;
+  for (const rd of roads) for (const q of rd.pts) {
+    const d = Math.abs(q[0] - x) + Math.abs(q[1] - y);
+    if (d < bd && !insideFoot(q[0], q[1])) { bd = d; best = q; }
+  }
+  if (!best) return null;
+  Pv.x = best[0]; Pv.y = best[1]; resolve(Pv, r);
+  return [Pv.x, Pv.y];
+}
+// is the straight move from a to b blocked by a wall (taller than the height h along the way)?
+const wallBetween = (ax, ay, bx, by, h = 0.3) => (Math.abs(bx - ax) + Math.abs(by - ay) > 1e-4) && rayWalls(ax, ay, h, bx, by, h) < 1;
+// after everything has moved the player: no passing through walls, no standing inside a building
+const guard = { x: 0, y: 0, vx: 0, vy: 0, v: null, safe: null, vsafe: null, t: 0 };
+function guardPlayer(dt) {
+  if (player.cuffed || player.ko || player.inCar) { guard.x = player.x; guard.y = player.y; guard.v = null; return; }
+  const special = (STORE && STORE.inside) || (GIO && GIO.inside && GIO.inside());
+  const v = player.vespa;
+  if (v) {
+    // a vehicle going so fast it would skip through a wall stops at the wall
+    if (guard.v === v && Math.hypot(v.x - guard.vx, v.y - guard.vy) < 8 && wallBetween(guard.vx, guard.vy, v.x, v.y, 0.5)) {
+      v.x = guard.vx; v.y = guard.vy; v.speed *= -0.2; player.x = v.x; player.y = v.y;
+    }
+    if (!special && insideFoot(v.x, v.y, 0.3)) {
+      const o = guard.vsafe && guard.vsafe[2] === v ? guard.vsafe : null, out = o ? [o[0], o[1]] : outOfBuildings(v.x, v.y, 1.0);
+      if (out) { v.x = out[0]; v.y = out[1]; v.speed = 0; player.x = v.x; player.y = v.y; }
+    } else if (!special && !insideFoot(v.x, v.y)) guard.vsafe = [v.x, v.y, v];
+    guard.v = v; guard.vx = v.x; guard.vy = v.y;
+  } else {
+    guard.v = null;
+    const moved = Math.hypot(player.x - guard.x, player.y - guard.y);
+    // walking, being shoved or flying through the air: a wall in the way stops you at your last spot
+    // (big jumps are teleports: entering a shop, a respawn, getting off a vehicle)
+    if (moved > 1e-4 && moved < 6 && wallBetween(guard.x, guard.y, player.x, player.y, 0.3 + Math.max(0, player.z || 0))) {
+      player.x = guard.x; player.y = guard.y;
+      if (player.fly) { player.fly.vx *= -0.25; player.fly.vy *= -0.25; }
+    }
+    if (!special && (player.z || 0) < 0.6 && insideFoot(player.x, player.y, 0.3)) {
+      // somehow inside anyway: out to the nearest street, else back to the last good spot
+      const out = outOfBuildings(player.x, player.y) || (guard.safe && [guard.safe[0], guard.safe[1]]);
+      if (out) { player.x = out[0]; player.y = out[1]; if (player.fly) { player.fly.vx = player.fly.vy = 0; } }
+    } else if (!special && (guard.t -= dt) <= 0) {
+      guard.t = 0.25;
+      if (!insideFoot(player.x, player.y)) guard.safe = [player.x, player.y];
+    }
+  }
+  guard.x = player.x; guard.y = player.y;
+}
 // ------------------------------------------------------------------ update
 const Pv = { x: 0, y: 0 };
 function updatePlayer(dt) {
@@ -6286,7 +6379,13 @@ function updatePlayer(dt) {
   const inp = inputAxes();
   if (player.fly) {
     const f = player.fly; f.t += dt;
-    player.x += f.vx * dt; player.y += f.vy * dt; player.z += f.vz * dt; f.vz -= 22 * dt;
+    {
+      const ox = player.x, oy = player.y, nx = ox + f.vx * dt, ny = oy + f.vy * dt;
+      const t = rayWalls(ox, oy, 0.3 + player.z, nx, ny, 0.3 + Math.max(0, player.z + f.vz * dt));
+      if (t < 1) { const k = Math.max(0, t - 0.08); player.x = ox + (nx - ox) * k; player.y = oy + (ny - oy) * k; f.vx *= -0.25; f.vy *= -0.25; }
+      else { player.x = nx; player.y = ny; }
+    }
+    player.z += f.vz * dt; f.vz -= 22 * dt;
     Pv.x = player.x; Pv.y = player.y; resolve(Pv, 0.45); player.x = Pv.x; player.y = Pv.y;
     if (player.z <= 0) { player.z = 0; f.vz = 0; f.vx *= 0.8; f.vy *= 0.8; }
     player.mesh.rotation.set(-Math.min(1.5, f.t * 3), player.mesh.rotation.y + f.spin * dt * (player.z > 0 ? 1 : 0), 0);
@@ -6641,6 +6740,11 @@ function updateHints() {
   }
   hint('');
 }
+// where you are, when Giorgio's wide shot puts a roof between you and the camera
+const youMark = document.createElement('div');
+youMark.hidden = true; youMark.textContent = 'YOU';
+youMark.style.cssText = 'position:fixed;z-index:6;pointer-events:none;transform:translate(-50%,-100%);font:800 11px/1 system-ui,sans-serif;letter-spacing:.08em;color:#fff;background:#d9558f;padding:4px 7px 5px;border-radius:9px;box-shadow:0 2px 8px rgba(0,0,0,.35)';
+document.body.appendChild(youMark);
 function updateCamera(dt) {
   let tx, ty, th, heading;
   if (player.vespa) { tx = player.vespa.x; ty = player.vespa.y; th = player.vespa.spec.car ? 2.1 : 1.6; heading = player.vespa.heading; }
@@ -6649,18 +6753,54 @@ function updateCamera(dt) {
   const big = aran.active && !player.carry ? aran.D : 0;
   const base = player.vespa ? Math.max(player.vespa.spec.cam || 10, cam.dist) : player.inCar ? 12 : cam.dist;
   const inRest = !!(GIO && GIO.inside()), indoor = STORE && STORE.inside && !inRest;
-  const want = inRest ? 9 : indoor ? Math.min(6.0, cam.dist) : Math.max(base, big * 1.25 + 6);
+  // a giant Giorgio nearby: back off far enough that both you and all of him fit in the shot, more the bigger he gets
+  const gi = GIO && !inRest && !indoor && GIO.mapInfo ? GIO.mapInfo().giant : null;
+  let gf = 0, wantG = 0;
+  if (gi) {
+    cam.gs = cam.gs ? lerp(cam.gs, gi.s, Math.min(1, dt * 1.2)) : gi.s;
+    cam.gx = gi.x; cam.gy = gi.y;
+    const H = cam.gs * 2.1, dG = Math.hypot(gi.x - tx, gi.y - ty);
+    gf = cam.gs > 3 ? clamp(1.4 - dG / (H * 2.2 + 50), 0, 1) : 0;
+    // shortest distance at which the player's feet and the top of his head both fit the 55 degree view
+    for (let D = 9; D < 175; D *= 1.07) {
+      const ch = Math.max(th + Math.tan(0.3) * D, cam.gs >= 13 ? 28 : 0); // up over the roofs if a building is in the way
+      wantG = D / Math.cos(0.3);
+      if (Math.atan2(ch, D) + Math.atan2(H * 1.08 - ch, D + dG) < 0.7) break; // the top of the screen is HUD
+    }
+    if (cam.gs >= 13) wantG = Math.max(wantG, 36);
+  }
+  cam.gf = lerp(cam.gf || 0, gf, Math.min(1, dt * (gf > (cam.gf || 0) ? 1.0 : 0.6)));
+  if (!gi && cam.gf < 0.01) { cam.gs = 0; wantG = 0; }
+  if (!gi) wantG = cam.wantG || 0; else cam.wantG = wantG;
+  let want = inRest ? 9 : indoor ? Math.min(6.0, cam.dist) : Math.max(base, big * 1.25 + 6);
+  if (cam.gf > 0.001) want = Math.max(want, lerp(want, Math.min(175, wantG), cam.gf));
+  scene.fog.near = 150 + cam.gf * 170; scene.fog.far = 620 + cam.gf * 560;
   cam.tx = lerp(cam.tx, tx, Math.min(1, dt * 8)); cam.ty = lerp(cam.ty, ty, Math.min(1, dt * 8)); cam.th = lerp(cam.th, th + big * 0.15, Math.min(1, dt * 4));
   // auto-follow behind the direction of travel
   const moving = player.vespa ? Math.abs(player.vespa.speed) > 1.5 : player.speed > 1;
   if (moving && clock.elapsedTime - cam.lastDrag > 1.4) {
     cam.yaw += angDiff(cam.yaw, heading) * Math.min(1, dt * (player.vespa ? 2.2 : 1.1));
+  } else if (cam.gf > 0.3 && clock.elapsedTime - cam.lastDrag > 2.5) {
+    // standing still near him: turn so he's in the shot
+    cam.yaw += angDiff(cam.yaw, Math.atan2(cam.gy - ty, cam.gx - tx)) * Math.min(1, dt * 0.9 * cam.gf);
   }
-  const pitch = inRest ? 0.95 : indoor ? Math.min(0.42, cam.pitch) : cam.pitch + (big > 4 ? 0.2 : 0);
-  const horiz = Math.cos(pitch) * want;
-  const offX = -Math.cos(cam.yaw) * horiz, offY = -Math.sin(cam.yaw) * horiz;
-  const camH = cam.th + Math.sin(pitch) * want;
-  const t = rayWalls(cam.tx, cam.ty, cam.th, cam.tx + offX, cam.ty + offY, camH);
+  let pitch = inRest ? 0.95 : indoor ? Math.min(0.42, cam.pitch) : cam.pitch + (big > 4 ? 0.2 : 0);
+  if (cam.gf > 0.001) pitch = lerp(pitch, 0.3, cam.gf);
+  let horiz = Math.cos(pitch) * want;
+  let offX = -Math.cos(cam.yaw) * horiz, offY = -Math.sin(cam.yaw) * horiz;
+  let camH = cam.th + Math.sin(pitch) * want;
+  let t = rayWalls(cam.tx, cam.ty, cam.th, cam.tx + offX, cam.ty + offY, camH);
+  // with Giorgio around, a building in the way lifts the camera over the roofs and keeps the wide shot;
+  // if a roof then hides you, a marker shows where you are
+  if (cam.gf > 0.05) {
+    const needUp = t < 0.97 && want > 30 ? Math.max(0, Math.asin(clamp((28 - cam.th) / want, 0, 0.84)) - pitch) : 0;
+    cam.gp = lerp(cam.gp || 0, needUp * cam.gf, Math.min(1, dt * (needUp * cam.gf > (cam.gp || 0) ? 4 : 0.7)));
+    const pt = pitch + cam.gp;
+    horiz = Math.cos(pt) * want; offX = -Math.cos(cam.yaw) * horiz; offY = -Math.sin(cam.yaw) * horiz; camH = cam.th + Math.sin(pt) * want;
+    t = rayWalls(cam.tx, cam.ty, cam.th, cam.tx + offX, cam.ty + offY, camH);
+    cam.occl = t < 0.97;
+    if (camH > 25) t = 1;
+  } else { cam.gp = 0; cam.occl = false; }
   const dNow = t < 1 ? Math.max(indoor ? 0.35 : 1.0, t * want - 0.6) : want;
   cam.distNow = dNow < cam.distNow ? lerp(cam.distNow, dNow, Math.min(1, dt * 14)) : lerp(cam.distNow, dNow, Math.min(1, dt * 2.5));
   const k = cam.distNow / want;
@@ -6677,7 +6817,16 @@ function updateCamera(dt) {
   if (cam.shake > 0) { cam.shake = Math.max(0, cam.shake - dt * 1.6); Pv.x += (Math.random() - 0.5) * cam.shake; Pv.y += (Math.random() - 0.5) * cam.shake; }
   camera.position.set(Pv.x, cy + (cam.shake > 0 ? (Math.random() - 0.5) * cam.shake * 0.6 : 0), -Pv.y);
   player.mesh.visible = cam.distNow > 0.9 && !player.inCar && !(player.vespa && player.vespa.spec.car);
-  camera.lookAt(cam.tx, cam.th, -cam.ty);
+  if (cam.gf > 0.01 && cam.gs) {
+    // aim between your feet and the top of his head, his head a little below the HUD at the top
+    const P = camera.position, dP = Math.max(1, Math.hypot(cam.tx - P.x, -cam.ty - P.z)), dG = Math.max(1, Math.hypot(cam.gx - P.x, -cam.gy - P.z));
+    const aP = Math.atan2(0.1 - P.y, dP), aG = Math.atan2(cam.gs * 2.1 - P.y, dG);
+    const mid = (aP + aG) / 2 + 0.08, ly = lerp(cam.th, P.y + Math.tan(mid) * dP, cam.gf);
+    camera.lookAt(cam.tx, ly, -cam.ty);
+  } else camera.lookAt(cam.tx, cam.th, -cam.ty);
+  const ym = project(player.x, player.y, 2.3), showYou = cam.gf > 0.4 && cam.occl && ym && ym[1] > 0 && ym[1] < innerHeight;
+  if (youMark.hidden === !!showYou) youMark.hidden = !showYou;
+  if (showYou) { youMark.style.left = ym[0] + 'px'; youMark.style.top = ym[1] + 'px'; }
   sun.position.set(cam.tx + SUN_OFF.x, SUN_OFF.y, -cam.ty + SUN_OFF.z);
   sun.target.position.set(cam.tx, 0, -cam.ty);
   scene.userData.sky.position.copy(camera.position);
@@ -8284,6 +8433,7 @@ function tick(dt) {
   updateVips(dt);
   updateTraffic(dt);
   updateFlyers(dt);
+  if (game.started) guardPlayer(dt);
   if (!player.vespa && !player.fly && !player.ko) {
     player.mesh.position.set(player.x, (STORE && STORE.inside ? 0.12 : 0.09) + player.z, -player.y);
     player.mesh.rotation.set(0, player.a + Math.PI / 2, 0);
@@ -8813,7 +8963,7 @@ startBtn.addEventListener('click', () => {
   objective();
   toast('Benvenuto nella Kalsa', isTouch ? 'roam free · quests are in the menu' : 'roam free · quests are in the menu (Esc)', 2600);
 });
-window.__kalsa = { GIO: () => GIO, questTarget, perf, post, LOD_PEOPLE, personLod, PAD, padPanel: () => { try { const p = padPanel(); return p && p.id; } catch (e) { return String(e); } }, game, cam, CORSA: () => CORSA, RACE, makeVehicleMesh, makePoliceCar, CAOS, VITA, CITTA, RETE, BOOT, FAC, renderer, cityMat, clock, launchPed, launchPlayer, dispatch, afterSocial, SPECIALS, LM, streamAround, rebuildNear, CHUNKS, stream, spawnVehicle, takeParked, nearestRide, parked, MODELS, VSPEC, gps, setWaypoint, clearWaypoint, openMap, closeMap, bigMap, drawBigMap, LOTS, player, game, aran, cam, camera, sfx, vespas, FRIG, ZIA, scene, renderer, peds, traffic, nearestRoadDir, tick, keys, stats, roads, STORE, convos, talk, openTalk, talkOption, closeTalk, nearestTalkable, roster, syncRoster, studio, openStudio, closeStudio, rebuildPreview, openMenu, closeMenu, resetAll, records, posePerson, makePerson, fullLook, presetLook, setPlayerLook, encodeLook, decodeLook, startConvo, press: (k) => { if (k === 'E') actPressed = true; }, police, wallet, reportCrime, startThief, vips, addMoney, CG: () => CG, WG: () => WG, routeOn, surrender: () => respawnAfterArrest() };
+window.__kalsa = { insideFoot, outOfBuildings, guard, mount, dismount, GIO: () => GIO, questTarget, perf, post, LOD_PEOPLE, personLod, PAD, padPanel: () => { try { const p = padPanel(); return p && p.id; } catch (e) { return String(e); } }, game, cam, CORSA: () => CORSA, RACE, makeVehicleMesh, makePoliceCar, CAOS, VITA, CITTA, RETE, BOOT, FAC, renderer, cityMat, clock, launchPed, launchPlayer, dispatch, afterSocial, SPECIALS, LM, streamAround, rebuildNear, CHUNKS, stream, spawnVehicle, takeParked, nearestRide, parked, MODELS, VSPEC, gps, setWaypoint, clearWaypoint, openMap, closeMap, bigMap, drawBigMap, LOTS, player, game, aran, cam, camera, sfx, vespas, FRIG, ZIA, scene, renderer, peds, traffic, nearestRoadDir, tick, keys, stats, roads, STORE, convos, talk, openTalk, talkOption, closeTalk, nearestTalkable, roster, syncRoster, studio, openStudio, closeStudio, rebuildPreview, openMenu, closeMenu, resetAll, records, posePerson, makePerson, fullLook, presetLook, setPlayerLook, encodeLook, decodeLook, startConvo, press: (k) => { if (k === 'E') actPressed = true; }, police, wallet, reportCrime, startThief, vips, addMoney, CG: () => CG, WG: () => WG, routeOn, surrender: () => respawnAfterArrest() };
 
 </script>
 
