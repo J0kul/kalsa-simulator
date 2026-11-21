@@ -5617,7 +5617,7 @@ function padPanel() {
   const vis = (id) => { const e = document.getElementById(id); return e && !e.hidden && e.getClientRects().length > 0 ? e : null; };
   if (typeof studio !== 'undefined' && studio.open) return vis('studio');
   if (bigMap.open) return vis('map');
-  return vis('menu') || vis('result') || vis('news') || (!game.started && vis('title')) || vis('gioTalk') || vis('talk');
+  return vis('menu') || vis('result') || vis('news') || (!game.started && vis('title')) || vis('gioTalk') || vis('aleTalk') || vis('talk');
 }
 function padFocusables(root) {
   return [...root.querySelectorAll('button, select, input, [tabindex="0"]')].filter((e) => !e.disabled && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden');
@@ -6713,6 +6713,7 @@ function interact() {
     startCarry();
     return;
   }
+  if (ALE && ALE.interact()) return;
   if (GIO && GIO.interact()) return;
   if (player.vespa) { dismount(); return; }
   if (STORE && STORE.interact()) return;
@@ -6726,6 +6727,7 @@ function interact() {
 function updateHints() {
   if (!game.started || game.state === 'fail' || game.state === 'done') { hint(''); return; }
   if (game.state === 'idle' && Math.hypot(player.x - FRIG.sx, player.y - FRIG.sy) < 4.5) { hint(isTouch ? 'Tap <kbd>E</kbd> to grab the arancina' : 'Press <kbd>E</kbd> to grab the arancina'); return; }
+  if (ALE) { const h = ALE.hint(); if (h) { hint(h); return; } }
   if (GIO) { const h = GIO.hint(); if (h) { hint(h); return; } }
   if (STORE) { const h = STORE.hint(); if (h) { hint(h); return; } }
   if (CAOS) { const h = CAOS.hint(); if (h) { hint(h); return; } }
@@ -8332,7 +8334,7 @@ function updateVips(dt) {
 
 // ------------------------------------------------------------------ loop
 let objT = 0;
-let CAOS = null, VITA = null, RETE = null, CORSA = null, GIO = null; // combat, street life and multiplayer (caos.js, vita.js, rete.js), loaded at the end
+let CAOS = null, VITA = null, RETE = null, CORSA = null, GIO = null, ALE = null; // combat, street life and multiplayer (caos.js, vita.js, rete.js), loaded at the end
 // adaptive resolution: keep the frame rate up on slower GPUs
 const DPR_MAX = renderer.getPixelRatio();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { try { perfWarm(3); } catch (e) {} } });
@@ -8428,7 +8430,7 @@ function tick(dt) {
     modUpdate(CAOS, dt);
   }
   updatePeds(dt);
-  if (game.started) { modUpdate(VITA, dt); modUpdate(RETE, dt); modUpdate(CORSA, dt); modUpdate(GIO, dt); }
+  if (game.started) { modUpdate(VITA, dt); modUpdate(RETE, dt); modUpdate(CORSA, dt); modUpdate(GIO, dt); modUpdate(ALE, dt); }
   for (const p of peds) { const d = Math.abs(p.x - cam.tx) + Math.abs(p.y - cam.ty); p.mesh.visible = d < 150 || p.state === 'fly'; }
   updateVips(dt);
   updateTraffic(dt);
@@ -8922,7 +8924,7 @@ initRoster();
 window.__upgradeReady = false;
 stage('waking the neighbours');
 try {
-  const GAME = { THREE, scene, camera, renderer, player, peds, traffic, vespas, parked, police, game, clock, cam, keys, stats, wallet, STORE, LM, roads, areas, shopSpots, stalls: CITTA.stalls, carriages: CITTA.carriages,
+  const GAME = { insideFoot, THREE, scene, camera, renderer, player, peds, traffic, vespas, parked, police, game, clock, cam, keys, stats, wallet, STORE, LM, roads, areas, shopSpots, stalls: CITTA.stalls, carriages: CITTA.carriages,
     WG, CG, sfx, isTouch, vips, convos, talk, labelTargets, ZIA, FRIG, MODELS, VSPEC, TAU, dummy, vcMat,
     $, rand, pick, clamp, lerp, angDiff, hash, centroid, pip, say, toast, hint, showTG, project, resolve, resolveProps, propsNear, rayWalls, launchPed, launchPlayer, launchTraffic, launchParked,
     reactAround, setReact, setDance, startConvo, endConvo, afterSocial, resumeWalk, placePed, stepTo, faceTo, makePerson, randomLook, fullLook, posePerson, animatePerson, addMoney, fmtEur,
@@ -8939,6 +8941,7 @@ try {
   RETE = rete;
   }
   stage('marking out the circuit');
+  try { const ale = await loadMod('./ale.js', 15000); ale.init(GAME); ALE = ale; } catch (e) { console.error('ale.js', e); BOOT.errs.push('ale.js: ' + (e && e.message)); }
   try { const gio = await loadMod('./giorgio.js', 15000); gio.init(GAME, RETE); GIO = gio; GAME.boss = gio; } catch (e) { console.error('giorgio.js', e); BOOT.errs.push('giorgio.js: ' + (e && e.message)); BOOT.missing.push('Giorgio'); }
   try { const corsa = await loadMod('./corsa.js', 15000); corsa.init(GAME, RETE); CORSA = corsa; } catch (e) { console.error('corsa.js', e); BOOT.errs.push('corsa.js: ' + (e && e.message)); BOOT.missing.push('racing'); }
 } catch (e) { console.error('upgrade modules failed to load', e); BOOT.errs.push('add-ons: ' + (e && e.message)); BOOT.missing.push('combat and street life'); }
@@ -8963,7 +8966,7 @@ startBtn.addEventListener('click', () => {
   objective();
   toast('Benvenuto nella Kalsa', isTouch ? 'roam free · quests are in the menu' : 'roam free · quests are in the menu (Esc)', 2600);
 });
-window.__kalsa = { insideFoot, outOfBuildings, guard, mount, dismount, GIO: () => GIO, questTarget, perf, post, LOD_PEOPLE, personLod, PAD, padPanel: () => { try { const p = padPanel(); return p && p.id; } catch (e) { return String(e); } }, game, cam, CORSA: () => CORSA, RACE, makeVehicleMesh, makePoliceCar, CAOS, VITA, CITTA, RETE, BOOT, FAC, renderer, cityMat, clock, launchPed, launchPlayer, dispatch, afterSocial, SPECIALS, LM, streamAround, rebuildNear, CHUNKS, stream, spawnVehicle, takeParked, nearestRide, parked, MODELS, VSPEC, gps, setWaypoint, clearWaypoint, openMap, closeMap, bigMap, drawBigMap, LOTS, player, game, aran, cam, camera, sfx, vespas, FRIG, ZIA, scene, renderer, peds, traffic, nearestRoadDir, tick, keys, stats, roads, STORE, convos, talk, openTalk, talkOption, closeTalk, nearestTalkable, roster, syncRoster, studio, openStudio, closeStudio, rebuildPreview, openMenu, closeMenu, resetAll, records, posePerson, makePerson, fullLook, presetLook, setPlayerLook, encodeLook, decodeLook, startConvo, press: (k) => { if (k === 'E') actPressed = true; }, police, wallet, reportCrime, startThief, vips, addMoney, CG: () => CG, WG: () => WG, routeOn, surrender: () => respawnAfterArrest() };
+window.__kalsa = { ALE: () => ALE, insideFoot, outOfBuildings, guard, mount, dismount, GIO: () => GIO, questTarget, perf, post, LOD_PEOPLE, personLod, PAD, padPanel: () => { try { const p = padPanel(); return p && p.id; } catch (e) { return String(e); } }, game, cam, CORSA: () => CORSA, RACE, makeVehicleMesh, makePoliceCar, CAOS, VITA, CITTA, RETE, BOOT, FAC, renderer, cityMat, clock, launchPed, launchPlayer, dispatch, afterSocial, SPECIALS, LM, streamAround, rebuildNear, CHUNKS, stream, spawnVehicle, takeParked, nearestRide, parked, MODELS, VSPEC, gps, setWaypoint, clearWaypoint, openMap, closeMap, bigMap, drawBigMap, LOTS, player, game, aran, cam, camera, sfx, vespas, FRIG, ZIA, scene, renderer, peds, traffic, nearestRoadDir, tick, keys, stats, roads, STORE, convos, talk, openTalk, talkOption, closeTalk, nearestTalkable, roster, syncRoster, studio, openStudio, closeStudio, rebuildPreview, openMenu, closeMenu, resetAll, records, posePerson, makePerson, fullLook, presetLook, setPlayerLook, encodeLook, decodeLook, startConvo, press: (k) => { if (k === 'E') actPressed = true; }, police, wallet, reportCrime, startThief, vips, addMoney, CG: () => CG, WG: () => WG, routeOn, surrender: () => respawnAfterArrest() };
 
 </script>
 
