@@ -683,6 +683,39 @@ const RACE = (() => {
 })();
 W.trees = W.trees.filter((t) => RACE.clear(t[0] / 10, t[1] / 10));
 W.cars = W.cars.filter((c) => RACE.clear(c[0] / 10, c[1] / 10));
+const LIB = (() => {
+  const segs = W.roads.filter((r) => r[2] === 'Via della Libertà').map((r) => { const p = []; for (let i = 0; i < r[3].length; i += 2) p.push([r[3][i] / 10, r[3][i + 1] / 10]); return p; });
+  if (!segs.length) return null;
+  let best = null, bl = 0;
+  for (const p of segs) { const a = p[0], b = p[p.length - 1], L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (L > bl) { bl = L; best = [a, b]; } }
+  const O = best[0], dx = (best[1][0] - O[0]) / bl, dy = (best[1][1] - O[1]) / bl, nx = dy, ny = -dx;
+  const AL = (x, y) => (x - O[0]) * dx + (y - O[1]) * dy, OF = (x, y) => (x - O[0]) * nx + (y - O[1]) * ny;
+  // the long straight carriageways, by how far across the boulevard they run
+  const lines = [];
+  for (const p of segs) for (let i = 1; i < p.length; i++) {
+    const a = p[i - 1], b = p[i], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (L < 20 || Math.abs((b[0] - a[0]) * dx + (b[1] - a[1]) * dy) / L < 0.98) continue;
+    const off = (OF(a[0], a[1]) + OF(b[0], b[1])) / 2, a0 = Math.min(AL(a[0], a[1]), AL(b[0], b[1])), a1 = Math.max(AL(a[0], a[1]), AL(b[0], b[1]));
+    let c = lines.find((l) => Math.abs(l.off - off) < 4);
+    if (!c) lines.push(c = { off, a0, a1 }); else { c.a0 = Math.min(c.a0, a0); c.a1 = Math.max(c.a1, a1); }
+  }
+  lines.sort((a, b) => a.off - b.off);
+  const full = lines.filter((l) => l.a1 - l.a0 > 300);
+  if (full.length < 2) return null;
+  const lo = full[0].off, hi = full[full.length - 1].off, a0 = Math.max(...full.map((l) => l.a0)) + 2, a1 = Math.min(...full.map((l) => l.a1)) - 2;
+  const inIsles = (x, y) => { const o = OF(x, y), a = AL(x, y); return a > a0 && a < a1 && o > lo + 1.2 && o < hi - 1.2; };
+  const cen = (f) => { let sx = 0, sy = 0, n = 0; for (let i = 0; i < f.length; i += 2) { sx += f[i]; sy += f[i + 1]; n++; } return [sx / n / 10, sy / n / 10]; };
+  let gone = 0;
+  for (const L of W.lots) { if (!L || !L[0] || L[0].length < 6) continue; const c = cen(L[0]); if (inIsles(c[0], c[1])) { L[0] = []; gone++; } }
+  W.courts = W.courts.filter((o) => { const c = cen(o); return !inIsles(c[0], c[1]); });
+  if (W.blockLod) W.blockLod = W.blockLod.filter(([o]) => { const c = cen(o); return !inIsles(c[0], c[1]); });
+  // the Famila front takes over the ground floor south of Via Siracusa: no other shop signs there
+  W.shops = (W.shops || []).filter((sh) => { const L = W.lots[sh[0]]; if (!L || !L[0] || L[0].length < 6) return true; const c = cen(L[0]), a = AL(c[0], c[1]), o = OF(c[0], c[1]); return !(a > 224 && a < 258 && o > hi && o < hi + 40); });
+  // no parking in the middle of the central carriageway
+  const mid = full.length >= 3 ? full[1].off : null;
+  if (mid != null) W.cars = W.cars.filter((c) => { const x = c[0] / 10, y = c[1] / 10, a = AL(x, y); return !(a > a0 && a < a1 && Math.abs(OF(x, y) - mid) < 4.5); });
+  return { O, dx, dy, nx, ny, lines: full.map((l) => ({ off: l.off, a0: l.a0, a1: l.a1 })), a0, a1, lo, hi, gone, AL, OF };
+})();
 stage('building the city');
 loadEl.textContent = 'Building the Kalsa';
 await new Promise((r) => setTimeout(r, 30));
@@ -5978,6 +6011,7 @@ function drawBigMap() {
   const tgt = questTarget();
   if (tgt && !tgt.near) pin(tgt.x, tgt.y, '#d9558f', tgt.n);
   if (GIO) { const gi = GIO.mapInfo(); if (gi.giant) pin(gi.giant.x, gi.giant.y, '#d7261e', 'Giorgio'); }
+  if (LIBM) { const fm = LIBM.mapInfo(); if (fm) pin(fm.x, fm.y, '#e2401c', 'Famila'); }
   if (gps.wp) pin(gps.wp.x, gps.wp.y, '#ffd23f', 'Destination');
   {
     const [sx, sy] = mapW2S(player.x, player.y), h = player.vespa ? player.vespa.heading : player.a;
@@ -6339,7 +6373,7 @@ const wallBetween = (ax, ay, bx, by, h = 0.3) => (Math.abs(bx - ax) + Math.abs(b
 const guard = { x: 0, y: 0, vx: 0, vy: 0, v: null, safe: null, vsafe: null, t: 0 };
 function guardPlayer(dt) {
   if (player.cuffed || player.ko || player.inCar) { guard.x = player.x; guard.y = player.y; guard.v = null; return; }
-  const special = (STORE && STORE.inside) || (GIO && GIO.inside && GIO.inside());
+  const special = (STORE && STORE.inside) || (GIO && GIO.inside && GIO.inside()) || (LIBM && LIBM.inside());
   const v = player.vespa;
   if (v) {
     // a vehicle going so fast it would skip through a wall stops at the wall
@@ -6713,6 +6747,7 @@ function interact() {
     startCarry();
     return;
   }
+  if (LIBM && LIBM.interact()) return;
   if (ALE && ALE.interact()) return;
   if (GIO && GIO.interact()) return;
   if (player.vespa) { dismount(); return; }
@@ -6727,6 +6762,7 @@ function interact() {
 function updateHints() {
   if (!game.started || game.state === 'fail' || game.state === 'done') { hint(''); return; }
   if (game.state === 'idle' && Math.hypot(player.x - FRIG.sx, player.y - FRIG.sy) < 4.5) { hint(isTouch ? 'Tap <kbd>E</kbd> to grab the arancina' : 'Press <kbd>E</kbd> to grab the arancina'); return; }
+  if (LIBM) { const h = LIBM.hint(); if (h) { hint(h); return; } }
   if (ALE) { const h = ALE.hint(); if (h) { hint(h); return; } }
   if (GIO) { const h = GIO.hint(); if (h) { hint(h); return; } }
   if (STORE) { const h = STORE.hint(); if (h) { hint(h); return; } }
@@ -6754,7 +6790,7 @@ function updateCamera(dt) {
   else { tx = player.x; ty = player.y; th = 1.5 + player.z * 0.6; heading = player.a; }
   const big = aran.active && !player.carry ? aran.D : 0;
   const base = player.vespa ? Math.max(player.vespa.spec.cam || 10, cam.dist) : player.inCar ? 12 : cam.dist;
-  const inRest = !!(GIO && GIO.inside()), indoor = STORE && STORE.inside && !inRest;
+  const inRest = !!((GIO && GIO.inside()) || (LIBM && LIBM.inside())), indoor = STORE && STORE.inside && !inRest;
   // a giant Giorgio nearby: back off far enough that both you and all of him fit in the shot, more the bigger he gets
   const gi = GIO && !inRest && !indoor && GIO.mapInfo ? GIO.mapInfo().giant : null;
   let gf = 0, wantG = 0;
@@ -8334,7 +8370,7 @@ function updateVips(dt) {
 
 // ------------------------------------------------------------------ loop
 let objT = 0;
-let CAOS = null, VITA = null, RETE = null, CORSA = null, GIO = null, ALE = null; // combat, street life and multiplayer (caos.js, vita.js, rete.js), loaded at the end
+let CAOS = null, VITA = null, RETE = null, CORSA = null, GIO = null, ALE = null, LIBM = null; // combat, street life and multiplayer (caos.js, vita.js, rete.js), loaded at the end
 // adaptive resolution: keep the frame rate up on slower GPUs
 const DPR_MAX = renderer.getPixelRatio();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { try { perfWarm(3); } catch (e) {} } });
@@ -8430,7 +8466,7 @@ function tick(dt) {
     modUpdate(CAOS, dt);
   }
   updatePeds(dt);
-  if (game.started) { modUpdate(VITA, dt); modUpdate(RETE, dt); modUpdate(CORSA, dt); modUpdate(GIO, dt); modUpdate(ALE, dt); }
+  if (game.started) { modUpdate(VITA, dt); modUpdate(RETE, dt); modUpdate(CORSA, dt); modUpdate(GIO, dt); modUpdate(ALE, dt); modUpdate(LIBM, dt); }
   for (const p of peds) { const d = Math.abs(p.x - cam.tx) + Math.abs(p.y - cam.ty); p.mesh.visible = d < 150 || p.state === 'fly'; }
   updateVips(dt);
   updateTraffic(dt);
@@ -8924,7 +8960,7 @@ initRoster();
 window.__upgradeReady = false;
 stage('waking the neighbours');
 try {
-  const GAME = { insideFoot, THREE, scene, camera, renderer, player, peds, traffic, vespas, parked, police, game, clock, cam, keys, stats, wallet, STORE, LM, roads, areas, shopSpots, stalls: CITTA.stalls, carriages: CITTA.carriages,
+  const GAME = { libFrame: LIB, guard, insideFoot, THREE, scene, camera, renderer, player, peds, traffic, vespas, parked, police, game, clock, cam, keys, stats, wallet, STORE, LM, roads, areas, shopSpots, stalls: CITTA.stalls, carriages: CITTA.carriages,
     WG, CG, sfx, isTouch, vips, convos, talk, labelTargets, ZIA, FRIG, MODELS, VSPEC, TAU, dummy, vcMat,
     $, rand, pick, clamp, lerp, angDiff, hash, centroid, pip, say, toast, hint, showTG, project, resolve, resolveProps, propsNear, rayWalls, launchPed, launchPlayer, launchTraffic, launchParked,
     reactAround, setReact, setDance, startConvo, endConvo, afterSocial, resumeWalk, placePed, stepTo, faceTo, makePerson, randomLook, fullLook, posePerson, animatePerson, addMoney, fmtEur,
@@ -8941,6 +8977,7 @@ try {
   RETE = rete;
   }
   stage('marking out the circuit');
+  try { const lm = await loadMod('./liberta.js', 20000); lm.init(GAME); LIBM = lm; GAME.lib = lm; } catch (e) { console.error('liberta.js', e); BOOT.errs.push('liberta.js: ' + (e && e.message)); }
   try { const ale = await loadMod('./ale.js', 15000); ale.init(GAME); ALE = ale; } catch (e) { console.error('ale.js', e); BOOT.errs.push('ale.js: ' + (e && e.message)); }
   try { const gio = await loadMod('./giorgio.js', 15000); gio.init(GAME, RETE); GIO = gio; GAME.boss = gio; } catch (e) { console.error('giorgio.js', e); BOOT.errs.push('giorgio.js: ' + (e && e.message)); BOOT.missing.push('Giorgio'); }
   try { const corsa = await loadMod('./corsa.js', 15000); corsa.init(GAME, RETE); CORSA = corsa; } catch (e) { console.error('corsa.js', e); BOOT.errs.push('corsa.js: ' + (e && e.message)); BOOT.missing.push('racing'); }
@@ -8966,7 +9003,7 @@ startBtn.addEventListener('click', () => {
   objective();
   toast('Benvenuto nella Kalsa', isTouch ? 'roam free · quests are in the menu' : 'roam free · quests are in the menu (Esc)', 2600);
 });
-window.__kalsa = { ALE: () => ALE, insideFoot, outOfBuildings, guard, mount, dismount, GIO: () => GIO, questTarget, perf, post, LOD_PEOPLE, personLod, PAD, padPanel: () => { try { const p = padPanel(); return p && p.id; } catch (e) { return String(e); } }, game, cam, CORSA: () => CORSA, RACE, makeVehicleMesh, makePoliceCar, CAOS, VITA, CITTA, RETE, BOOT, FAC, renderer, cityMat, clock, launchPed, launchPlayer, dispatch, afterSocial, SPECIALS, LM, streamAround, rebuildNear, CHUNKS, stream, spawnVehicle, takeParked, nearestRide, parked, MODELS, VSPEC, gps, setWaypoint, clearWaypoint, openMap, closeMap, bigMap, drawBigMap, LOTS, player, game, aran, cam, camera, sfx, vespas, FRIG, ZIA, scene, renderer, peds, traffic, nearestRoadDir, tick, keys, stats, roads, STORE, convos, talk, openTalk, talkOption, closeTalk, nearestTalkable, roster, syncRoster, studio, openStudio, closeStudio, rebuildPreview, openMenu, closeMenu, resetAll, records, posePerson, makePerson, fullLook, presetLook, setPlayerLook, encodeLook, decodeLook, startConvo, press: (k) => { if (k === 'E') actPressed = true; }, police, wallet, reportCrime, startThief, vips, addMoney, CG: () => CG, WG: () => WG, routeOn, surrender: () => respawnAfterArrest() };
+window.__kalsa = { LIB, LIBM: () => LIBM, ALE: () => ALE, insideFoot, outOfBuildings, guard, mount, dismount, GIO: () => GIO, questTarget, perf, post, LOD_PEOPLE, personLod, PAD, padPanel: () => { try { const p = padPanel(); return p && p.id; } catch (e) { return String(e); } }, game, cam, CORSA: () => CORSA, RACE, makeVehicleMesh, makePoliceCar, CAOS, VITA, CITTA, RETE, BOOT, FAC, renderer, cityMat, clock, launchPed, launchPlayer, dispatch, afterSocial, SPECIALS, LM, streamAround, rebuildNear, CHUNKS, stream, spawnVehicle, takeParked, nearestRide, parked, MODELS, VSPEC, gps, setWaypoint, clearWaypoint, openMap, closeMap, bigMap, drawBigMap, LOTS, player, game, aran, cam, camera, sfx, vespas, FRIG, ZIA, scene, renderer, peds, traffic, nearestRoadDir, tick, keys, stats, roads, STORE, convos, talk, openTalk, talkOption, closeTalk, nearestTalkable, roster, syncRoster, studio, openStudio, closeStudio, rebuildPreview, openMenu, closeMenu, resetAll, records, posePerson, makePerson, fullLook, presetLook, setPlayerLook, encodeLook, decodeLook, startConvo, press: (k) => { if (k === 'E') actPressed = true; }, police, wallet, reportCrime, startThief, vips, addMoney, CG: () => CG, WG: () => WG, routeOn, surrender: () => respawnAfterArrest() };
 
 </script>
 
