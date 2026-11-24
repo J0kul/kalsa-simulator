@@ -570,22 +570,23 @@ const { mergeGeometries, toCreasedNormals, mergeVertices, EffectComposer, Render
 // of sides gets enough of them to read as round; only shapes that are meant to be square (4 sides) keep their edges, with true flat faces.
 const HD = !matchMedia('(pointer: coarse)').matches;
 const _flat = (g) => { const n = g.toNonIndexed(); g.setIndex(null); for (const k of Object.keys(n.attributes)) g.setAttribute(k, n.attributes[k]); g.computeVertexNormals(); return g; };
+const _segR = (n, r) => (n <= 4 ? n : r < 0.06 ? Math.max(n, 8) : r < 0.2 ? Math.max(n, HD ? 12 : 10) : r < 0.6 ? Math.max(n, HD ? 18 : 12) : _upSeg(n));
 const _upSeg = (n) => (n <= 4 ? n : Math.max(n, HD ? 20 : 12, Math.min(HD ? 32 : 16, Math.round(n * 2))));
 const THREE = Object.assign({}, THREE0, {
   CylinderGeometry: class extends THREE0.CylinderGeometry {
-    constructor(rt = 1, rb = 1, h = 1, seg = 32, hs = 1, open = false, ts = 0, tl = Math.PI * 2) { super(rt, rb, h, _upSeg(seg), hs, open, ts, tl); if (seg <= 4) _flat(this); }
+    constructor(rt = 1, rb = 1, h = 1, seg = 32, hs = 1, open = false, ts = 0, tl = Math.PI * 2) { super(rt, rb, h, _segR(seg, Math.max(rt, rb)), hs, open, ts, tl); if (seg <= 4) _flat(this); }
   },
   ConeGeometry: class extends THREE0.ConeGeometry {
-    constructor(r = 1, h = 1, seg = 32, hs = 1, open = false, ts = 0, tl = Math.PI * 2) { super(r, h, _upSeg(seg), hs, open, ts, tl); if (seg <= 4) _flat(this); }
+    constructor(r = 1, h = 1, seg = 32, hs = 1, open = false, ts = 0, tl = Math.PI * 2) { super(r, h, _segR(seg, r), hs, open, ts, tl); if (seg <= 4) _flat(this); }
   },
   SphereGeometry: class extends THREE0.SphereGeometry {
-    constructor(r = 1, ws = 32, hs = 16, ...rest) { super(r, Math.max(ws, HD ? 32 : 18), Math.max(hs, HD ? 18 : 10), ...rest); }
+    constructor(r = 1, ws = 32, hs = 16, ...rest) { const big = r >= 0.6, mid = r >= 0.2; super(r, Math.max(ws, HD ? (big ? 32 : mid ? 20 : 12) : (big ? 18 : 12)), Math.max(hs, HD ? (big ? 18 : mid ? 12 : 8) : (big ? 10 : 8)), ...rest); }
   },
   IcosahedronGeometry: class extends THREE0.IcosahedronGeometry {
-    constructor(r = 1, detail = 0) { super(r, Math.min(detail + (HD ? 3 : 2), HD ? 4 : 3)); }
+    constructor(r = 1, detail = 0) { super(r, Math.min(detail + (r < 0.5 ? 1 : r < 2 ? (HD ? 2 : 1) : (HD ? 3 : 2)), HD ? 4 : 3)); }
   },
   TorusGeometry: class extends THREE0.TorusGeometry {
-    constructor(r = 1, tube = 0.4, rs = 12, ts = 48, arc = Math.PI * 2) { super(r, tube, Math.max(rs, 10), Math.max(ts, HD ? 32 : 20), arc); }
+    constructor(r = 1, tube = 0.4, rs = 12, ts = 48, arc = Math.PI * 2) { super(r, tube, Math.max(rs, tube < 0.05 ? 6 : 10), Math.max(ts, r < 0.3 ? 16 : HD ? 32 : 20), arc); }
   },
 });
 class RoundedBoxGeometry extends THREE0.RoundedBoxGeometry { constructor(w = 1, h = 1, d = 1, seg = 2, r = 0.1) { super(w, h, d, Math.max(seg, HD ? 4 : 2), r); } }
@@ -642,7 +643,10 @@ let W;
 const BOOT = window.__boot || { errs: [], missing: [] };
 const stage = (t) => { BOOT.stage = t; };
 // an add-on file that never arrives must not hold the game up for ever
-const loadMod = (p, ms = 30000) => Promise.race([import(p), new Promise((_, no) => setTimeout(() => no(new Error(p + ' took too long')), ms))]);
+const MODS = {};
+const preMod = (p) => MODS[p] || (MODS[p] = import(p));
+const loadMod = (p, ms = 60000) => Promise.race([preMod(p), new Promise((_, no) => setTimeout(() => no(new Error(p + ' took too long')), Math.max(ms, 60000)))]);
+for (const p of ['./citta.js', './caos.js', './vita.js', './rete.js', './liberta.js', './ale.js', './giorgio.js', './corsa.js']) preMod(p).catch(() => {});
 stage('downloading the map');
 {
   let res = null;
@@ -2899,8 +2903,6 @@ function makeVehicleMesh(kind, col) {
 const CAR_COLS = ['#e9e6df', '#e9e6df', '#c7372e', '#2f5ea8', '#3c3f45', '#9aa3ab', '#e2c14a', '#5d8a5a', '#b84f84'];
 const carBodyG = new RoundedBoxGeometry(3.5, 1.0, 1.62, 2, 0.22); carBodyG.translate(0, 0.78, 0);
 const carCabG = new RoundedBoxGeometry(2.05, 0.66, 1.5, 2, 0.16); carCabG.translate(-0.25, 1.58, 0);
-const wheelsG = vcGeo([...wheelParts([1.15, -1.15], [0.82, -0.82], 0.36, 0.26), [BX(0.05, 0.12, 0.4), LAMP, T(1.76, 0.92, 0.55)], [BX(0.05, 0.12, 0.4), LAMP, T(1.76, 0.92, -0.55)], [BX(0.05, 0.14, 0.3), TAIL, T(-1.76, 0.95, 0.6)], [BX(0.05, 0.14, 0.3), TAIL, T(-1.76, 0.95, -0.6)], [BX(3.52, 0.12, 1.64), TRIMC, T(0, 0.36, 0)]]);
-const glassMat = new THREE.MeshStandardMaterial({ color: '#33465a', roughness: 0.25, metalness: 0.3 });
 
 // parked fleet: everything you can see parked can be driven away
 const PARK_KINDS = [['hatch', 0.33], ['panda', 0.22], ['c500', 0.1], ['van', 0.08], ['lapa', 0.05], ['vespa', 0.09], ['scooter', 0.09], ['moto', 0.04]];
@@ -2919,38 +2921,58 @@ W.cars.forEach((c, i) => {
   parked.push(p);
   crec(x, y).cars.push(p);
 });
-function hideParked(p) { const c = crec(p.x, p.y); c.carsDirty = true; }
+function hideParked(p) {
+  const c = crec(p.x, p.y), bk = p.bk;
+  if (bk && c.carMesh && c.carMesh.geometry === bk.g) {
+    const pos = bk.g.attributes.position;
+    if (!p.alive) { const P = pos.array; for (let i = bk.o0; i < bk.o1; i += 3) { P[i] = p.x; P[i + 1] = -50; P[i + 2] = -p.y; } }
+    else bakeOne(p, pos.array, bk.g.attributes.normal.array, bk.g.attributes.color.array, bk.o0), bk.g.attributes.normal.needsUpdate = true, bk.g.attributes.color.needsUpdate = true;
+    pos.needsUpdate = true;
+    return;
+  }
+  c.carsDirty = true;
+}
 // bake a list of parked vehicles into one static mesh
-function bakeParked(list) {
+function bakeParked(list) { const g = bakeParkedGen(list); let r; do { r = g.next(); } while (!r.done); return r.value; }
+// puts one parked car's vertices at float offset o of P/N/Cc
+function bakeOne(p, P, N, Cc, o) {
+  const b = MODELS[p.kind].bake, ca = Math.cos(p.a), sa = Math.sin(p.a), X = p.x, Z = -p.y;
+  const cr = p.col.r, cg = p.col.g, cb = p.col.b;
+  const put = (pos, nor, col, cnt) => {
+    for (let i = 0; i < cnt * 3; i += 3) {
+      const lx = pos[i], ly = pos[i + 1], lz = pos[i + 2];
+      P[o] = X + ca * lx + sa * lz; P[o + 1] = ly; P[o + 2] = Z - sa * lx + ca * lz;
+      const nx = nor[i], ny = nor[i + 1], nz = nor[i + 2];
+      N[o] = ca * nx + sa * nz; N[o + 1] = ny; N[o + 2] = -sa * nx + ca * nz;
+      if (col) { Cc[o] = col[i]; Cc[o + 1] = col[i + 1]; Cc[o + 2] = col[i + 2]; } else { Cc[o] = cr; Cc[o + 1] = cg; Cc[o + 2] = cb; }
+      o += 3;
+    }
+  };
+  put(b.pp, b.pn, null, b.pp.length / 3);
+  put(b.tp, b.tn, b.tc, b.tp.length / 3);
+  return o;
+}
+function* bakeParkedGen(list) {
   let n = 0;
   for (const p of list) if (p.alive) n += MODELS[p.kind].bake.n;
   if (!n) return null;
   const P = new Float32Array(n * 3), N = new Float32Array(n * 3), Cc = new Float32Array(n * 3);
-  let o = 0;
+  const g = new THREE.BufferGeometry(), at = [];
+  let o = 0, k = 0;
   for (const p of list) {
-    if (!p.alive) continue;
-    const b = MODELS[p.kind].bake, ca = Math.cos(p.a), sa = Math.sin(p.a), X = p.x, Z = -p.y;
-    const cr = p.col.r, cg = p.col.g, cb = p.col.b;
-    const put = (pos, nor, col, cnt) => {
-      for (let i = 0; i < cnt * 3; i += 3) {
-        const lx = pos[i], ly = pos[i + 1], lz = pos[i + 2];
-        P[o] = X + ca * lx + sa * lz; P[o + 1] = ly; P[o + 2] = Z - sa * lx + ca * lz;
-        const nx = nor[i], ny = nor[i + 1], nz = nor[i + 2];
-        N[o] = ca * nx + sa * nz; N[o + 1] = ny; N[o + 2] = -sa * nx + ca * nz;
-        if (col) { Cc[o] = col[i]; Cc[o + 1] = col[i + 1]; Cc[o + 2] = col[i + 2]; } else { Cc[o] = cr; Cc[o + 1] = cg; Cc[o + 2] = cb; }
-        o += 3;
-      }
-    };
-    put(b.pp, b.pn, null, b.pp.length / 3);
-    put(b.tp, b.tn, b.tc, b.tp.length / 3);
+    if (!p.alive) { p.bk = null; continue; }
+    const o0 = o;
+    o = bakeOne(p, P, N, Cc, o);
+    at.push([p, o0, o]);
+    if (++k % 6 === 0) yield;
   }
-  const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(P, 3));
   g.setAttribute('normal', new THREE.BufferAttribute(N, 3));
   g.setAttribute('color', new THREE.BufferAttribute(Cc, 3));
   g.computeBoundingSphere();
   const m = new THREE.Mesh(g, carBakeMat);
   m.castShadow = true; m.receiveShadow = true;
+  for (const [p, o0, o1] of at) p.bk = { g, o0, o1 };
   return m;
 }
 
@@ -2961,12 +2983,13 @@ function chunkDist(c, x, y) { const dx = Math.max(Math.abs(x - c.cx) - CH / 2, 0
 function* buildChunkGen(c) {
   const buf = new Buf(), gbuf = new Buf();
   let n = 0;
-  for (const L of c.lots) { buildLot(buf, L); if (++n % 30 === 0) yield; }
-  for (const S of c.specials) { buildSpecial(buf, gbuf, S); if (++n % 6 === 0) yield; }
+  for (const L of c.lots) { buildLot(buf, L); if (++n % 5 === 0) yield; }
+  for (const S of c.specials) { buildSpecial(buf, gbuf, S); if (++n % 2 === 0) yield; }
   for (const fn of c.jobs) fn(buf, gbuf);
   yield;
-  for (const g of c.ground) { buildGround(gbuf, g); if (++n % 60 === 0) yield; }
+  for (const g of c.ground) { buildGround(gbuf, g); if (++n % 20 === 0) yield; }
   yield;
+  c.carBaked = yield* bakeParkedGen(c.cars);
   const meshes = [];
   if (buf.v) { const m = buf.mesh(cityMat); m.castShadow = true; m.receiveShadow = true; meshes.push(m); }
   if (gbuf.v) { const m = gbuf.mesh(flatMat); m.receiveShadow = true; meshes.push(m); }
@@ -2976,7 +2999,7 @@ function finishChunk(c, meshes) {
   for (const m of meshes) scene.add(m);
   c.meshes = meshes; c.built = true; c.building = false;
   setLodMask(c, true);
-  c.carMesh = bakeParked(c.cars); if (c.carMesh) scene.add(c.carMesh);
+  c.carMesh = c.carBaked !== undefined ? c.carBaked : bakeParked(c.cars); c.carBaked = undefined; if (c.carMesh) scene.add(c.carMesh);
   c.carsDirty = false;
   stream.built++;
 }
@@ -3018,6 +3041,7 @@ function updateStreaming(dt, x, y, budgetMs = 6) {
     if (!c.built) continue;
     if (c.carMesh) { scene.remove(c.carMesh); c.carMesh.geometry.dispose(); }
     c.carMesh = bakeParked(c.cars); if (c.carMesh) scene.add(c.carMesh);
+    break;
   }
 }
 // build everything around a point right now (start, teleports)
@@ -6367,6 +6391,32 @@ function outOfBuildings(x, y, r = 0.45) {
   Pv.x = best[0]; Pv.y = best[1]; resolve(Pv, r);
   return [Pv.x, Pv.y];
 }
+// footpaths in the map data that cut straight through a building: nobody walks those
+{
+  const gone = new Set();
+  for (const r of walkRoads) {
+    let bad = 0;
+    for (let s = 1; s < r.len && bad < 2; s += 2) { const [x, y] = along(r, s); if (insideFoot(x, y, 0.6)) bad++; }
+    if (bad >= 2) gone.add(r);
+  }
+  for (let i = walkRoads.length - 1; i >= 0; i--) if (gone.has(walkRoads[i])) walkRoads.splice(i, 1);
+  for (const p of peds) if (gone.has(p.road)) placePed(p, player);
+}
+// a few people a frame are checked; anyone found inside a building is walked back out to the street
+let pedCheck = 0;
+function pedsOutOfBuildings() {
+  if (!peds.length) return;
+  for (let k = 0; k < 4; k++) {
+    const p = peds[pedCheck = (pedCheck + 1) % peds.length];
+    if (p.state === 'fly' || p.state === 'shop' || !insideFoot(p.x, p.y, 0.4)) continue;
+    const out = outOfBuildings(p.x, p.y, 0.32);
+    if (!out) { placePed(p, player); continue; }
+    p.x = out[0]; p.y = out[1];
+    if (p.state === 'walk' || p.state === 'return') resumeWalk(p);
+    if (p.home) p.home = [p.x, p.y];
+    p.mesh.position.x = p.x; p.mesh.position.z = -p.y;
+  }
+}
 // is the straight move from a to b blocked by a wall (taller than the height h along the way)?
 const wallBetween = (ax, ay, bx, by, h = 0.3) => (Math.abs(bx - ax) + Math.abs(by - ay) > 1e-4) && rayWalls(ax, ay, h, bx, by, h) < 1;
 // after everything has moved the player: no passing through walls, no standing inside a building
@@ -6658,7 +6708,7 @@ function updateTraffic(dt) {
       c.t += dt; c.x += c.vx * dt; c.y += c.vy * dt; c.z += c.vz * dt; c.vz -= 20 * dt;
       c.mesh.position.set(c.x, Math.max(0, c.z), -c.y); c.mesh.rotation.x += c.ax * dt; c.mesh.rotation.z += c.ax * 0.7 * dt;
       if (c.z < 0 && c.t > 0.3) { c.z = 0; c.vx *= 0.3; c.vy *= 0.3; c.vz = 0; }
-      if (c.t > 4) { c.mesh.rotation.set(0, 0, 0); placeCar(c, player); c.state = 'drive'; }
+      if (c.t > 4) { c.mesh.rotation.set(0, 0, 0); placeCar(c, TOWN); c.state = 'drive'; }
       continue;
     }
     // look ahead for the player / arancina
@@ -6686,7 +6736,7 @@ function updateTraffic(dt) {
       else if (!player.vespa && c.speed > 3) launchPlayer(c.x, c.y, 7);
     }
     for (const p of peds) if (p.state === 'walk' && c.speed > 4 && Math.hypot(p.x - c.x, p.y - c.y) < 1.7) launchPed(p, c.x, c.y, 6, false);
-    if (Math.hypot(c.x - player.x, c.y - player.y) > 260) placeCar(c, player);
+    if (Math.hypot(c.x - TOWN.x, c.y - TOWN.y) > 260) placeCar(c, TOWN);
   }
 }
 function updateFlyers(dt) {
@@ -7004,13 +7054,13 @@ function afterSocial(p) {
   resumeWalk(p);
 }
 function resumeWalk(p) {
-  if (!p.road || !p.road.cum) { placePed(p, player); return; }
+  if (!p.road || !p.road.cum) { placePed(p, TOWN); return; }
   const pr = projectOnRoad(p.road, p.x, p.y);
   const [rx, ry, ra] = along(p.road, pr.s);
   const off = (p.x - rx) * -Math.sin(ra) + (p.y - ry) * Math.cos(ra);
   const lim = Math.min(2.2, p.road.hw);
   p.s = pr.s;
-  if (pr.d > 25) { placePed(p, player); return; }
+  if (pr.d > 25) { placePed(p, TOWN); return; }
   if (Math.abs(off) <= lim + 0.3) { p.off = clamp(off, -lim, lim); p.state = 'walk'; return; }
   p.off = clamp(off, -lim, lim) * 0.8;
   p.state = 'return';
@@ -7212,7 +7262,7 @@ function updatePeds(dt) {
           else if (!v && dP < 0.75 && player.speed > 0.5 && !p.bumped) { p.bumped = 2; if (Math.random() < 0.6) say(p.mesh, pick(SAY_BUMP), 1100); }
         }
         if (p.bumped) p.bumped = Math.max(0, p.bumped - dt);
-        if (dP > 170) placePed(p, player);
+        if ((TOWN.away ? Math.hypot(p.x - TOWN.x, p.y - TOWN.y) : dP) > 170) placePed(p, TOWN);
         break;
       }
       case 'return':
@@ -7303,7 +7353,7 @@ function spawnCustom(d) {
     p.state = look.behaviour;
     if (look.behaviour !== 'follow' && !p.home) p.home = [p.x, p.y];
   }
-  if (!p.road) placePed(p, player);
+  if (!p.road) placePed(p, TOWN);
   peds.push(p);
   return p;
 }
@@ -7502,7 +7552,6 @@ const POL_TEX = (() => {
   return t;
 })();
 const polBody = M('#22409c', { roughness: 0.35 }), polWhite = M('#f4f6f8', { roughness: 0.4 }), polSide = new THREE.MeshStandardMaterial({ map: POL_TEX, roughness: 0.45 });
-const polLampG = new THREE.BoxGeometry(0.3, 0.14, 0.44), polRoofG = new THREE.BoxGeometry(1.7, 0.05, 1.38), polBarG = new THREE.BoxGeometry(0.34, 0.08, 1.12), polSideG = new THREE.PlaneGeometry(2.7, 0.34), polHoodG = new THREE.BoxGeometry(1.0, 0.03, 1.3);
 const POLCAR = (() => { const c = genCar(CAR_SPEC.police, false); return { body: plainGeo(c.body), roof: plainGeo(c.roof), trim: vcGeo(c.trim), h: c.h }; })();
 function makePoliceCar() {
   const g = new THREE.Group(), S = CAR_SPEC.police;
@@ -8452,7 +8501,15 @@ function frame() {
   }
   requestAnimationFrame(frame);
 }
+const TOWN = { x: 0, y: 0, away: false };
+function updateTown() {
+  let d = null;
+  if (LIBM && LIBM.inside()) { const m = LIBM.mapInfo(); if (m) d = [m.x, m.y]; }
+  else if (GIO && GIO.inside()) { const m = GIO.mapInfo(); if (m && m.door) d = m.door; }
+  TOWN.away = !!d; TOWN.x = d ? d[0] : player.x; TOWN.y = d ? d[1] : player.y;
+}
 function tick(dt) {
+  updateTown();
   try { padPoll(dt); } catch (e) {}
   personLod(dt);
   if (game.started) {
@@ -8472,6 +8529,7 @@ function tick(dt) {
   updateTraffic(dt);
   updateFlyers(dt);
   if (game.started) guardPlayer(dt);
+  pedsOutOfBuildings();
   if (!player.vespa && !player.fly && !player.ko) {
     player.mesh.position.set(player.x, (STORE && STORE.inside ? 0.12 : 0.09) + player.z, -player.y);
     player.mesh.rotation.set(0, player.a + Math.PI / 2, 0);
@@ -8492,9 +8550,10 @@ function tick(dt) {
   updateCamera(dt);
   if (game.debugCam) { const d = game.debugCam; camera.position.set(d[0], d[2], -d[1]); camera.lookAt(d[3], d[5], -d[4]); sun.position.set(d[3] + SUN_OFF.x, SUN_OFF.y, -d[4] + SUN_OFF.z); sun.target.position.set(d[3], 0, -d[4]); scene.userData.sky.position.copy(camera.position); }
   {
-    const fx = game.debugCam ? game.debugCam[3] : cam.tx, fy = game.debugCam ? game.debugCam[4] : cam.ty;
+    const fx = game.debugCam ? game.debugCam[3] : TOWN.away ? TOWN.x : cam.tx, fy = game.debugCam ? game.debugCam[4] : TOWN.away ? TOWN.y : cam.ty;
     updateStreaming(dt, fx, fy, game.started ? 5 : 10);
     updateNear(fx, fy);
+    updateClusters(dt, fx, fy);
   }
   if (game.started) { updateGps(dt); drawGpsWorld(); }
   camera.updateMatrixWorld();
@@ -8538,6 +8597,45 @@ const local = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage blocked: keep going */ } },
 };
 
+// ------------------------------------------------------------------ instanced clusters
+const CLUSTERS = [];
+function splitSpreadInstances() {
+  const list = [];
+  scene.traverse((o) => { if (o.isInstancedMesh && o.parent === scene && o.frustumCulled !== false && !o.userData.dynamic && o.count === o.instanceMatrix.count && o.count > 24) list.push(o); });
+  const m = new THREE.Matrix4(), p = new THREE.Vector3(), c = new THREE.Color(), CELL = 150;
+  for (const im of list) {
+    const cells = new Map();
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let i = 0; i < im.count; i++) {
+      im.getMatrixAt(i, m); p.setFromMatrixPosition(m);
+      x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); z0 = Math.min(z0, p.z); z1 = Math.max(z1, p.z);
+      const k = Math.floor(p.x / CELL) + ',' + Math.floor(p.z / CELL);
+      let l = cells.get(k); if (!l) cells.set(k, l = []); l.push(i);
+    }
+    if (Math.max(x1 - x0, z1 - z0) < CELL) continue;
+    // only worth it for heavy things: splitting a few thousand triangles just adds draw calls
+    const g = im.geometry, per = (g.index ? g.index.count : g.attributes.position.count) / 3;
+    if (per * im.count < 60000) continue;
+    if (!im.geometry.boundingSphere) im.geometry.computeBoundingSphere();
+    // small things vanish sooner than big ones
+    const size = im.geometry.boundingSphere.radius, far = size < 1 ? 240 : size < 4 ? 380 : 560;
+    for (const idx of cells.values()) {
+      const part = new THREE.InstancedMesh(im.geometry, im.material, idx.length);
+      idx.forEach((i, j) => { im.getMatrixAt(i, m); part.setMatrixAt(j, m); if (im.instanceColor) { im.getColorAt(i, c); part.setColorAt(j, c); } });
+      part.castShadow = im.castShadow; part.receiveShadow = im.receiveShadow; part.renderOrder = im.renderOrder;
+      part.computeBoundingSphere();
+      scene.add(part);
+      CLUSTERS.push({ m: part, x: part.boundingSphere.center.x, z: part.boundingSphere.center.z, r: part.boundingSphere.radius, far });
+    }
+    scene.remove(im); im.dispose();
+  }
+}
+let clusterT = 0;
+function updateClusters(dt, x, y) {
+  if ((clusterT -= dt) > 0) return;
+  clusterT = 0.25;
+  for (const c of CLUSTERS) c.m.visible = Math.hypot(c.x - x, c.z + y) < c.far + c.r;
+}
 // ------------------------------------------------------------------ missions and the pause menu
 const MISSIONS = [{ id: 'arancina', name: 'Arancina per Zia Rosalia', where: 'Friggitoria · Piazza San Francesco → Piazza Magione' }, { id: 'giorgio', name: 'La fame di Giorgio', where: 'Tutto Compreso, Via Maqueda · a city event everyone online can join' }];
 let records = local.get('kalsa.records', {});
@@ -8960,7 +9058,7 @@ initRoster();
 window.__upgradeReady = false;
 stage('waking the neighbours');
 try {
-  const GAME = { libFrame: LIB, guard, insideFoot, THREE, scene, camera, renderer, player, peds, traffic, vespas, parked, police, game, clock, cam, keys, stats, wallet, STORE, LM, roads, areas, shopSpots, stalls: CITTA.stalls, carriages: CITTA.carriages,
+  const GAME = { makeVehicleMesh, town: TOWN, THREE0, outOfBuildings, disposeChar, libFrame: LIB, guard, insideFoot, THREE, scene, camera, renderer, player, peds, traffic, vespas, parked, police, game, clock, cam, keys, stats, wallet, STORE, LM, roads, areas, shopSpots, stalls: CITTA.stalls, carriages: CITTA.carriages,
     WG, CG, sfx, isTouch, vips, convos, talk, labelTargets, ZIA, FRIG, MODELS, VSPEC, TAU, dummy, vcMat,
     $, rand, pick, clamp, lerp, angDiff, hash, centroid, pip, say, toast, hint, showTG, project, resolve, resolveProps, propsNear, rayWalls, launchPed, launchPlayer, launchTraffic, launchParked,
     reactAround, setReact, setDance, startConvo, endConvo, afterSocial, resumeWalk, placePed, stepTo, faceTo, makePerson, randomLook, fullLook, posePerson, animatePerson, addMoney, fmtEur,
@@ -8983,6 +9081,7 @@ try {
   try { const corsa = await loadMod('./corsa.js', 15000); corsa.init(GAME, RETE); CORSA = corsa; } catch (e) { console.error('corsa.js', e); BOOT.errs.push('corsa.js: ' + (e && e.message)); BOOT.missing.push('racing'); }
 } catch (e) { console.error('upgrade modules failed to load', e); BOOT.errs.push('add-ons: ' + (e && e.message)); BOOT.missing.push('combat and street life'); }
 stage('finishing');
+try { splitSpreadInstances(); } catch (e) { console.error('split', e); }
 window.__upgradeReady = true;
 
 // title screen

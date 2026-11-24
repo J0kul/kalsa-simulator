@@ -56,7 +56,7 @@ function despawn(p) {
 // a spot on the street network some way from the player, preferably round a corner
 function farSpot(x, y, r0, r1) {
   const N = G.WG.nodes;
-  for (let k = 0; k < 50; k++) { const n = N[(Math.random() * N.length) | 0], d = Math.hypot(n[0] - x, n[1] - y); if (d > r0 && d < r1 && G.inPlay(n[0], n[1])) return n; }
+  for (let k = 0; k < 50; k++) { const n = N[(Math.random() * N.length) | 0], d = Math.hypot(n[0] - x, n[1] - y); if (d > r0 && d < r1 && G.inPlay(n[0], n[1]) && !(G.insideFoot && G.insideFoot(n[0], n[1], 0.3))) return n; }
   return null;
 }
 const street = (x, y) => G.nearestStreetName(x, y) || 'centro';
@@ -229,7 +229,7 @@ function spawnVigili() {
   });
 }
 function updateVigili(dt) {
-  const pl = G.player;
+  const pl = G.town && G.town.away ? G.town : G.player;
   for (const v of S.vigili) {
     if (v.state !== 'vigile') { if (v.state !== 'fly' && v.state !== 'down' && v.state !== 'react' && v.state !== 'chat' && v.state !== 'talk') v.state = 'vigile'; continue; }
     const dP = dist(v, pl);

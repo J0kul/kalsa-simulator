@@ -15,7 +15,7 @@ const LOOK = {
   facial: 'stubble', facialColor: '#241a14', glasses: 'none', hat: 'none', top: 'hoodie', c1: '#22283a', c2: '#e9e4da',
   pattern: 'solid', tie: 'none', bottom: 'jeans', bottomColor: '#3c4f6e', shoes: 'sneakers', shoeColor: '#f2f0ea',
 };
-const hyp = Math.hypot, clamp = (v, a, b) => Math.max(a, Math.min(b, v)), lerp = (a, b, t) => a + (b - a) * t;
+const hyp = Math.hypot, clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const face = (a) => Math.atan2(Math.cos(a), -Math.sin(a)); // game heading -> model rotation (people face +z)
 const KEY = 'kalsa.ale.v1';
 const mem = {
@@ -24,7 +24,7 @@ const mem = {
 };
 
 export function init(game) {
-  G = game; T = G.THREE;
+  G = game; T = G.THREE0 || G.THREE;
   findCorners();
   return true;
 }
@@ -124,8 +124,11 @@ function setOpacity(a, op) {
 function remove() {
   const a = S.a; if (!a) return;
   G.scene.remove(a.m);
+  // free the clone materials, the name tag and the model itself (each sighting builds a fresh one)
   a.m.traverse((o) => { if (o.isMesh && o.material) o.material.dispose(); });
-  if (a.base) { G.scene.remove(a.base); }
+  if (a.tag) { a.tag.material.map && a.tag.material.map.dispose(); a.tag.material.dispose(); a.m.remove(a.tag); }
+  if (G.disposeChar) G.disposeChar(a.m);
+  if (a.base) { G.scene.remove(a.base); a.base.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } }); }
   S.a = null;
 }
 function vanished(how) {

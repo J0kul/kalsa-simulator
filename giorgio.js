@@ -36,6 +36,13 @@ const S = {
 const store = { get() { try { return JSON.parse(localStorage.getItem('kalsa.giorgio') || '{}') || {}; } catch (e) { return {}; } }, set(o) { try { localStorage.setItem('kalsa.giorgio', JSON.stringify(o)); } catch (e) {} } };
 const hyp = Math.hypot, clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 // three.js turn (people face +z) for a heading in game coordinates
+// copies a person model without its userData: Object3D.clone() deep-copies userData through JSON, and a person's
+// userData points back at its own parts, so a plain clone turns every texture into an image string (a long freeze)
+function cloneLight(src) {
+  const saved = [];
+  src.traverse((o) => { saved.push([o, o.userData]); o.userData = {}; });
+  try { return src.clone(); } finally { for (const [o, u] of saved) o.userData = u; }
+}
 const face = (a) => Math.atan2(Math.cos(a), -Math.sin(a)), faceTo = (x0, y0, x1, y1) => face(Math.atan2(y1 - y0, x1 - x0));
 
 export function init(game, net) {
@@ -501,7 +508,7 @@ function chomp(ev) {
       let ped = null, bd = 14;
       for (const p of G.peds) { if (!p.mesh.visible || p.state === 'fly') continue; const d = hyp(p.x - ev.bx, p.y - ev.by); if (d < bd) { bd = d; ped = p; } }
       if (ped) {
-        const m = ped.mesh.clone(); G.scene.add(m);
+        const m = cloneLight(ped.mesh); G.scene.add(m);
         S.carried.push({ m, t: 0, from: [ped.x, 0, ped.y], to: mouth, person: true });
         G.placePed(ped, G.player);
         if (Math.random() < 0.6) setTimeout(() => G.say(m, G.pick(['AIUTOOO!', 'Mettimi giù!', 'Non sono commestibile!', 'Mammaaa!']), 1000), 50);
@@ -564,6 +571,8 @@ export function shotHit(sh) {
 export function update(dt) {
   S.now = (S.now || 0) + dt; S.vanT -= dt;
   const P = G.player;
+  // the dining room out at sea is only drawn while you're in it
+  if (S.room) S.room.visible = inside();
   if (inside()) updateRoom(dt);
   // the city event: run it if it's mine, follow it if it's someone else's
   const remote = remoteEvent();
@@ -680,6 +689,8 @@ function ringSpot(gx, gy, R, a) {
 function authorities(dt, ev) {
   const gs = S.gs; if (!gs) return;
   const lvl = authLevel(ev.s);
+  // the units arrive one per frame, so a new level doesn't build ten people and a helicopter in a single frame
+  if (S.authQ && S.authQ.length) { S.authQ.shift()(); S.authAt = null; }
   if (lvl > S.lvl) {
     for (let l = S.lvl + 1; l <= lvl; l++) addLevel(l);
     S.lvl = lvl;
@@ -716,22 +727,23 @@ function authorities(dt, ev) {
 }
 function addLevel(l) {
   const A = S.auth || (S.auth = { cars: [], cops: [], army: [], heli: null });
+  const Q = S.authQ || (S.authQ = []);
   if (l === 1 || l === 2) {
     const nCars = l === 1 ? 4 : 3, nCops = l === 1 ? 4 : 2;
-    for (let i = 0; i < nCars; i++) { const c = G.makePoliceCar(); c.visible = true; A.cars.push(c); }
-    for (let i = 0; i < nCops; i++) { const m = G.makePerson(G.policeLook((A.cops.length + i) % 8)); if (G.noLod) G.noLod(m); G.scene.add(m); A.cops.push(m); }
+    for (let i = 0; i < nCars; i++) Q.push(() => { const c = G.makePoliceCar(); c.visible = true; A.cars.push(c); });
+    for (let i = 0; i < nCops; i++) Q.push(() => { const m = G.makePerson(G.policeLook(A.cops.length % 8)); if (G.noLod) G.noLod(m); G.scene.add(m); A.cops.push(m); });
   }
-  if (l === 2 && !A.heli) A.heli = makeHeli();
-  if (l === 3) { for (let i = 0; i < 2; i++) { const v = G.makeVehicleMesh('van', '#4b5a35'); G.scene.add(v); A.army.push(v); } A.army.push(makeTank()); }
+  if (l === 2) Q.push(() => { if (!A.heli) A.heli = makeHeli(); });
+  if (l === 3) { for (let i = 0; i < 2; i++) Q.push(() => { const v = G.makeVehicleMesh('van', '#4b5a35'); G.scene.add(v); A.army.push(v); }); Q.push(() => A.army.push(makeTank())); }
 }
 function clearAuthorities() {
   const A = S.auth; if (A) {
     for (const c of A.cars) G.scene.remove(c);
-    for (const m of A.cops) { G.scene.remove(m); }
+    for (const m of A.cops) { G.scene.remove(m); if (G.disposeChar) G.disposeChar(m); }
     for (const m of A.army) G.scene.remove(m);
     if (A.heli) G.scene.remove(A.heli);
   }
-  S.auth = null; S.authAt = null;
+  S.auth = null; S.authAt = null; S.authQ = [];
   for (const v of S.vans) G.scene.remove(v); S.vans.length = 0; S.vanAt = null;
   if (S.com) talkClose(true);
 }

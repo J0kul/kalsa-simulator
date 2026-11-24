@@ -2,13 +2,13 @@
 // open 24 hours, with a full shop inside. In the dairy aisle: Paolo, who gets angry about everything.
 // Say hello to him and watch what happens when a little old lady asks him where the yoghurt is.
 let G = null, T = null, F = null;
-const hyp = Math.hypot, clamp = (v, a, b) => Math.max(a, Math.min(b, v)), lerp = (a, b, t) => a + (b - a) * t;
+const hyp = Math.hypot, clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const face = (a) => Math.atan2(Math.cos(a), -Math.sin(a)); // game heading -> model rotation (people face +z)
 
 // the shop floor is built out at sea, where nothing else is, and you're moved there when you walk in
 const R = [800, 1380], RW = 36, RD = 26;              // centre and size of the shop floor (game metres)
 const IN_DOOR = [10.5, -12.2];                          // the inside of the doors (local)
-const PAOLO_SPOT = [-6.2, 11.0], BUCKETS = [-3.4, 10.5], LADY_FROM = [-13.25, 1.5];
+const PAOLO_SPOT = [-6.2, 11.0], BUCKETS = [-3.4, 10.5], LADY_FROM = [-9.75, 6.4];
 const S = {
   inside: false, back: null, door: null, doorN: null, front: null, room: null,
   paolo: null, lady: null, scene: 'idle', st: 0, greeted: 0, cool: 0, grumbleT: 6, now: 0, step: 0,
@@ -23,13 +23,34 @@ function canvasTex(w, h, draw) {
   const cv = document.createElement('canvas'); cv.width = w; cv.height = h; draw(cv.getContext('2d'), w, h);
   const t = new T.CanvasTexture(cv); t.colorSpace = T.SRGBColorSpace; t.anisotropy = 4; return t;
 }
+// plain coloured boxes added to a group marked for batching are merged into a few meshes at the end (one draw call per
+// kind of surface instead of hundreds); anything else is a mesh of its own
+const BATCHED = { rotation: {}, position: {}, scale: {} };
 function addBox(g, w, h, d, col, x, y, z, ry = 0, o) {
+  if (g.userData.batch && typeof col === 'string') {
+    const geo = new T.BoxGeometry(w, h, d); if (ry) geo.rotateY(ry); geo.translate(x, y, z);
+    g.userData.batch.push([geo, col, o ? JSON.stringify(o) : '']);
+    return BATCHED;
+  }
   const m = new T.Mesh(new T.BoxGeometry(w, h, d), typeof col === 'string' ? MC(col, o) : col);
   m.position.set(x, y, z); if (ry) m.rotation.y = ry; g.add(m); return m;
 }
+function flushBatch(g, shadows) {
+  const byKind = new Map(), c = new T.Color();
+  for (const [geo, col, ok] of g.userData.batch) {
+    c.set(col); tint(geo, [c.r, c.g, c.b]);
+    let l = byKind.get(ok); if (!l) byKind.set(ok, l = []); l.push(geo);
+  }
+  for (const [ok, list] of byKind) {
+    const m = new T.Mesh(merge(list), new T.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, ...(ok ? JSON.parse(ok) : {}) }));
+    m.receiveShadow = true; m.castShadow = !!shadows; g.add(m);
+    for (const x of list) x.dispose();
+  }
+  g.userData.batch = null;
+}
 
 export function init(game) {
-  G = game; T = G.THREE; F = G.libFrame;
+  G = game; T = G.THREE0 || G.THREE; F = G.libFrame; // plain three.js: everything here picks its own detail
   if (F) { buildBoulevard(); buildFront(); }
   buildRoom(); buildCast();
   return true;
@@ -241,7 +262,7 @@ function buildFront() {
   const off = face0 - 0.04;
   const [cx, cy] = at(ALc, off);
   // local frame: +x along the front (away from Politeama), +z out into the street
-  const out = [-F.nx, -F.ny], g = new T.Group();
+  const out = [-F.nx, -F.ny], g = new T.Group(); g.userData.batch = [];
   g.position.set(cx, 0.09, -cy); g.rotation.y = Math.atan2(F.dy, F.dx) + Math.PI; // local +z points out of the building
   // big white fascia with the name, and the band of cladding above
   const fascia = new T.Mesh(new T.BoxGeometry(WID, 1.1, 0.35), [MC('#f2f2f0'), MC('#f2f2f0'), MC('#f2f2f0'), MC('#f2f2f0'), new T.MeshBasicMaterial({ map: famSign(2048, 96, 'aperto 24 ore su 24'), toneMapped: false }), MC('#f2f2f0')]);
@@ -273,6 +294,7 @@ function buildFront() {
   const board = new T.Mesh(new T.PlaneGeometry(0.7, 1.0), new T.MeshBasicMaterial({ map: posterTex('OFFERTE', '%', 'della settimana', '#141116', '#ffe14d'), toneMapped: false, side: T.DoubleSide }));
   board.position.set(6.5, 0.6, 1.4); board.rotation.x = -0.2; g.add(board);
   for (let i = 0; i < 4; i++) { const hoop = new T.Mesh(new T.TorusGeometry(0.4, 0.03, 6, 16, Math.PI), MC('#6c7276', { metalness: 0.6 })); hoop.position.set(8.4 + i * 0.7, 0.05, 1.2); g.add(hoop); }
+  flushBatch(g, true);
   G.scene.add(g);
   S.front = g;
   const [dx, dy] = at(ALc - DX, off);
@@ -297,8 +319,7 @@ const PRODUCT_COLS = {
   bevande: ['#d7261e', '#3d7fd9', '#6fbf73', '#ff8a3d', '#ffffff', '#2b2b2e'],
 };
 function buildRoom() {
-  const g = new T.Group(); g.position.set(R[0], 0, -R[1]);
-  const L = (lx, h, ly) => [lx, h, -ly];                  // local metres -> group position
+  const g = new T.Group(); g.position.set(R[0], 0, -R[1]); g.userData.batch = [];
   const x0 = -RW / 2, x1 = RW / 2, y0 = -RD / 2, y1 = RD / 2;
   // a solid base under everything, then the tiled floor
   addBox(g, RW + 1, 1.2, RD + 1, '#6b6f72', 0, -0.6, 0);
@@ -323,9 +344,9 @@ function buildRoom() {
     for (const [g0, g1] of gaps.concat([[len, len]])) { if (g0 > s0) pieces.push([s0, g0]); s0 = g1; }
     for (const [p0, p1] of pieces) {
       const mid = (p0 + p1) / 2, px = ax + ux * mid, py = ay + uy * mid, w = p1 - p0;
-      const m = addBox(g, w, WH, 0.3, '#f4f2ee', px, WH / 2, -py); m.rotation.y = ang;
-      const band = addBox(g, w, 0.35, 0.32, '#e2401c', px, 2.55, -py); band.rotation.y = ang;
-      const skirt = addBox(g, w, 0.18, 0.33, '#7a7f83', px, 0.09, -py); skirt.rotation.y = ang;
+      addBox(g, w, WH, 0.3, '#f4f2ee', px, WH / 2, -py, ang);
+      addBox(g, w, 0.35, 0.32, '#e2401c', px, 2.55, -py, ang);
+      addBox(g, w, 0.18, 0.33, '#7a7f83', px, 0.09, -py, ang);
       G.addSeg(W2(ax + ux * p0, ay + uy * p0), W2(ax + ux * p1, ay + uy * p1), WH);
     }
   };
@@ -347,7 +368,7 @@ function buildRoom() {
   const prodBox = new T.InstancedMesh(new T.BoxGeometry(1, 1, 1), new T.MeshStandardMaterial({ roughness: 0.6 }), 6000);
   const prodCan = new T.InstancedMesh(new T.CylinderGeometry(0.5, 0.5, 1, 10), new T.MeshStandardMaterial({ roughness: 0.4, metalness: 0.25 }), 3000);
   let nb = 0, nc = 0;
-  const m4 = new T.Matrix4(), q = new T.Quaternion(), p = new T.Vector3(), sc = new T.Vector3(), col = new T.Color(), Yax = new T.Vector3(0, 1, 0);
+  const m4 = new T.Matrix4(), q = new T.Quaternion(), p = new T.Vector3(), sc = new T.Vector3(), col = new T.Color();
   const putBox = (x, y, z, sx, sy, sz, c) => { if (nb >= 6000) return; p.set(x, y, z); q.identity(); sc.set(sx, sy, sz); prodBox.setMatrixAt(nb, m4.compose(p, q, sc)); prodBox.setColorAt(nb++, col.set(c)); };
   const putCan = (x, y, z, r, h, c) => { if (nc >= 3000) return; p.set(x, y, z); q.identity(); sc.set(r * 2, h, r * 2); prodCan.setMatrixAt(nc, m4.compose(p, q, sc)); prodCan.setColorAt(nc++, col.set(c)); };
   const TIERS = [0.12, 0.5, 0.88, 1.26, 1.64];
@@ -450,7 +471,7 @@ function buildRoom() {
 
   // ---------- fruit and veg: angled crates by the entrance
   const fruitCols = [['#ff8a3d', 0.07], ['#d7261e', 0.07], ['#8fd14f', 0.065], ['#f2d22c', 0.06], ['#6b2a5a', 0.08], ['#e5452c', 0.06], ['#3d7f2a', 0.09], ['#f6e7b6', 0.08]];
-  const fruit = new T.InstancedMesh(new T.IcosahedronGeometry(1, 1), new T.MeshStandardMaterial({ roughness: 0.55 }), 2600);
+  const fruit = new T.InstancedMesh(new T.IcosahedronGeometry(1, 0), new T.MeshStandardMaterial({ roughness: 0.55 }), 2600);
   let nf = 0;
   for (const [tx, ty] of [[9.5, -2], [13.5, -2], [9.5, 2.2], [13.5, 2.2]]) {
     addBox(g, 3.0, 0.75, 1.6, '#8a5a2b', tx, 0.38, -ty);
@@ -468,7 +489,7 @@ function buildRoom() {
     solid(tx - 1.55, ty - 0.85, tx + 1.55, ty + 0.85, 1.0);
   }
   fruit.count = nf; g.add(fruit);
-  const scale = addBox(g, 0.4, 0.15, 0.35, '#f4f2ee', 15.6, 1.0, 0.1); addBox(g, 0.5, 0.95, 0.4, '#7a7f83', 15.6, 0.48, 0.1); solid(15.35, -0.15, 15.85, 0.35, 1);
+  addBox(g, 0.4, 0.15, 0.35, '#f4f2ee', 15.6, 1.0, 0.1); addBox(g, 0.5, 0.95, 0.4, '#7a7f83', 15.6, 0.48, 0.1); solid(15.35, -0.15, 15.85, 0.35, 1);
   // drinks along the east wall
   addBox(g, 0.7, 2.0, 9, '#d7dadc', x1 - 0.45, 1.0, -(-4.8));
   fillRun(x1 - 0.8, -9.3, -0.3, -1, 'bevande', 0.5);
@@ -495,7 +516,7 @@ function buildRoom() {
     addBox(g, 0.5, 1.2, 0.5, '#e2401c', tx + 0.05, 0.6, -(-10.0));
     for (let i = 0; i < 12; i++) putBox(tx - 0.2 + (i % 3) * 0.2, 0.75 + Math.floor(i / 3) * 0.25, -(-6.0), 0.16, 0.2, 0.08, ['#e85d75', '#f2c94c', '#9b6fd1', '#d7261e'][i % 4]);
     addBox(g, 0.5, 1.6, 0.25, '#c4c8cb', tx, 0.8, -(-6.0));
-    const lampPole = addBox(g, 0.04, 2.6, 0.04, '#9aa1a6', tx + 0.42, 1.3, -(-9.6));
+    addBox(g, 0.04, 2.6, 0.04, '#9aa1a6', tx + 0.42, 1.3, -(-9.6));
     const num = new T.Mesh(new T.BoxGeometry(0.3, 0.3, 0.06), new T.MeshBasicMaterial({ map: canvasTex(64, 64, (c, w, h) => { c.fillStyle = '#e2401c'; c.fillRect(0, 0, w, h); c.fillStyle = '#fff'; c.font = '900 44px system-ui'; c.textAlign = 'center'; c.fillText(String((tx + 14) / 5), w / 2, 48); }), toneMapped: false }));
     num.position.set(tx + 0.42, 2.7, -(-9.6)); g.add(num);
     solid(tx - 0.45, -10.25, tx + 0.45, -5.85);
@@ -508,6 +529,7 @@ function buildRoom() {
   const gate = (gx) => { addBox(g, 0.12, 1.5, 0.5, '#c4c8cb', gx, 0.75, -(-11.9)); solid(gx - 0.08, -12.2, gx + 0.08, -11.6, 1.5); };
   gate(8.6); gate(12.4);
 
+  flushBatch(g, false);
   g.add(prodBox, prodCan);
   prodBox.count = nb; prodCan.count = nc;
   prodBox.instanceMatrix.needsUpdate = true; prodCan.instanceMatrix.needsUpdate = true;
@@ -586,7 +608,7 @@ const ANNOYED = ['Chi talìi?!', 'Un m\'aviti a stari accussì vicinu!', 'Mi sta
 function startScene() {
   S.scene = 'greet'; S.st = 0; S.step = 0; S.pours = 0;
   S.puddle.visible = false; S.puddle.scale.setScalar(0.01);
-  if (S.lady) { G.scene.remove(S.lady.m); S.lady = null; }
+  if (S.lady) freeLady();
   for (const b of S.buckets) b.visible = true;
   say({ m: G.player.mesh }, 'Ciao Paolo!', 1400);
 }
@@ -595,8 +617,25 @@ function spawnLady() {
   // her own copy of the materials, so she can get covered in yoghurt without everyone else
   S.lady.mats = [];
   S.lady.m.traverse((o) => { if (o.isMesh && o.material) { o.material = o.material.clone(); S.lady.mats.push(o.material); } });
-  S.lady.path = [W2(-13.25, 9.4), W2(-7.5, 10.2)]; S.lady.pi = 0; S.lady.cover = 0;
+  S.lady.path = [W2(-9.75, 9.3), W2(-7.5, 10.2)]; S.lady.pi = 0; S.lady.cover = 0;
   S.lady.drips = [];
+}
+// the lady is built fresh for every incident, so everything of hers is freed when she's gone
+function freeLady() {
+  const L = S.lady; if (!L) return;
+  G.scene.remove(L.m);
+  for (const d of L.drips) { L.m.remove(d); d.geometry.dispose(); }
+  for (const m of L.mats) m.dispose();
+  if (G.disposeChar) G.disposeChar(L.m);
+  S.lady = null;
+}
+// one bucket to pour, made once and reused
+function carryBucket() {
+  if (!S.carry) { S.carry = bucketMesh(); S.carry.visible = false; G.scene.add(S.carry); }
+  const b = S.carry, lid = b.getObjectByName('lid'), fill = b.getObjectByName('fill');
+  if (lid) lid.visible = false; if (fill) fill.visible = true;
+  b.rotation.set(0, 0, 0); b.userData.fall = null;
+  return b;
 }
 function coverLady(k) {
   const L = S.lady; if (!L) return;
@@ -609,8 +648,11 @@ function coverLady(k) {
     L.m.add(d); L.drips.push(d);
   }
 }
+const DROP_T = {};
 function updateDrops(dt) {
-  const list = S.dropList, m4 = new T.Matrix4(), q = new T.Quaternion(), p = new T.Vector3(), sc = new T.Vector3();
+  if (!DROP_T.m4) { DROP_T.m4 = new T.Matrix4(); DROP_T.q = new T.Quaternion(); DROP_T.p = new T.Vector3(); DROP_T.sc = new T.Vector3(); }
+  const list = S.dropList, { m4, q, p, sc } = DROP_T;
+  if (!list.length && !S.drops.count) return;
   for (let i = list.length - 1; i >= 0; i--) {
     const d = list[i]; d.vz -= 9.8 * dt; d.x += d.vx * dt; d.y += d.vy * dt; d.z += d.vz * dt;
     if (d.z <= 0.04 || (S.lady && hyp(d.x - S.lady.x, d.y - S.lady.y) < 0.28 && d.z < 1.85 && d.z > 0.4 && Math.random() < 0.3)) list.splice(i, 1);
@@ -642,7 +684,7 @@ function updateScene(dt) {
       turnTo(P, P.x + 0, P.y + 1, dt, 3); G.posePerson(P.m, 'idle', S.now, 2); arms(P, -0.6, -0.6);
       if (S.step === 0 && S.st > 0.3) { S.step = 1; say(P, '...ogni jornu a stissa storia.', 1800); }
       const tgt = L.path[L.pi];
-      if (walkTo(L, tgt[0], tgt[1], 0.85, dt)) { if (++L.pi >= L.path.length) { S.scene = 'ask'; S.st = 0; S.step = 0; } }
+      if (walkTo(L, tgt[0], tgt[1], 1.1, dt)) { if (++L.pi >= L.path.length) { S.scene = 'ask'; S.st = 0; S.step = 0; } }
       break;
     }
     case 'ask':
@@ -672,7 +714,7 @@ function updateScene(dt) {
       const k = clamp(S.st / 0.8, 0, 1);
       if (S.step === 0) {
         S.step = 1; const src = S.buckets.find((x) => x.visible) || S.buckets[0];
-        src.visible = false; S.bucket = bucketMesh(); G.scene.add(S.bucket);
+        src.visible = false; S.bucket = carryBucket(); S.bucket.visible = true;
         const lidM = S.bucket.getObjectByName('lid'); if (lidM) lidM.visible = false;
         G.sfx && G.sfx.pick && G.sfx.pick();
       }
@@ -730,13 +772,13 @@ function updateScene(dt) {
         if (walkTo(L, tgt[0], tgt[1], 0.7, dt)) L.pi++;
         if (S.step === 0 && S.st > 2) { S.step = 1; say(L, 'Vergogna! Chiamo me figghiu!', 2000); }
         if (Math.random() < dt * 6) S.dropList.push({ x: L.x + (Math.random() - 0.5) * 0.3, y: L.y + (Math.random() - 0.5) * 0.3, z: 1.0 + Math.random() * 0.6, vx: 0, vy: 0, vz: 0 });
-      } else if (L) { G.scene.remove(L.m); S.lady = null; }
+      } else if (L) freeLady();
       if (S.st > 1.5 && S.step < 2) {
         S.step = 2;
         const st = store.get(); st.yog = (st.yog || 0) + 1; store.set(st);
         G.toast('Paolo lost it', st.yog === 1 ? 'all she asked was where the yoghurt was' : `yoghurt incidents in the dairy aisle: ${st.yog}`, 2600);
       }
-      if (!S.lady && S.st > 6) { S.scene = 'idle'; S.st = 0; S.cool = 12; if (S.bucket) { G.scene.remove(S.bucket); S.bucket = null; } for (const b of S.buckets) b.visible = true; }
+      if (!S.lady && S.st > 6) { S.scene = 'idle'; S.st = 0; S.cool = 12; if (S.bucket) { S.bucket.visible = false; S.bucket = null; } for (const b of S.buckets) b.visible = true; }
       break;
     }
   }
@@ -792,6 +834,11 @@ export function update(dt) {
   S.now += dt;
   if (S.cool > 0) S.cool -= dt;
   const P = G.player;
+  if (S.room && S.room.visible !== S.inside) {
+    S.room.visible = S.inside; S.drops.visible = S.inside;
+    for (const o of [S.paolo, S.cashier, S.deli, ...S.shoppers, S.lady]) if (o) o.m.visible = S.inside;
+    if (S.carry) S.carry.visible = S.inside && !!S.bucket;
+  }
   if (S.inside) {
     // keep inside the walls of the shop
     P.x = clamp(P.x, R[0] - RW / 2 + 0.5, R[0] + RW / 2 - 0.5); P.y = clamp(P.y, R[1] - RD / 2 + 0.5, R[1] + RD / 2 - 0.5);
