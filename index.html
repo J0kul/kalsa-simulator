@@ -646,7 +646,7 @@ const stage = (t) => { BOOT.stage = t; };
 const MODS = {};
 const preMod = (p) => MODS[p] || (MODS[p] = import(p));
 const loadMod = (p, ms = 60000) => Promise.race([preMod(p), new Promise((_, no) => setTimeout(() => no(new Error(p + ' took too long')), Math.max(ms, 60000)))]);
-for (const p of ['./citta.js', './caos.js', './vita.js', './rete.js', './liberta.js', './ale.js', './giorgio.js', './corsa.js']) preMod(p).catch(() => {});
+for (const p of ['./citta.js', './caos.js', './vita.js', './rete.js', './liberta.js', './ale.js', './pazzi.js', './giorgio.js', './corsa.js']) preMod(p).catch(() => {});
 stage('downloading the map');
 {
   let res = null;
@@ -8419,7 +8419,7 @@ function updateVips(dt) {
 
 // ------------------------------------------------------------------ loop
 let objT = 0;
-let CAOS = null, VITA = null, RETE = null, CORSA = null, GIO = null, ALE = null, LIBM = null; // combat, street life and multiplayer (caos.js, vita.js, rete.js), loaded at the end
+let CAOS = null, VITA = null, RETE = null, CORSA = null, GIO = null, ALE = null, LIBM = null, PAZZI = null; // combat, street life and multiplayer (caos.js, vita.js, rete.js), loaded at the end
 // adaptive resolution: keep the frame rate up on slower GPUs
 const DPR_MAX = renderer.getPixelRatio();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { try { perfWarm(3); } catch (e) {} } });
@@ -8523,7 +8523,7 @@ function tick(dt) {
     modUpdate(CAOS, dt);
   }
   updatePeds(dt);
-  if (game.started) { modUpdate(VITA, dt); modUpdate(RETE, dt); modUpdate(CORSA, dt); modUpdate(GIO, dt); modUpdate(ALE, dt); modUpdate(LIBM, dt); }
+  if (game.started) { modUpdate(VITA, dt); modUpdate(RETE, dt); modUpdate(CORSA, dt); modUpdate(GIO, dt); modUpdate(ALE, dt); modUpdate(LIBM, dt); modUpdate(PAZZI, dt); }
   for (const p of peds) { const d = Math.abs(p.x - cam.tx) + Math.abs(p.y - cam.ty); p.mesh.visible = d < 150 || p.state === 'fly'; }
   updateVips(dt);
   updateTraffic(dt);
@@ -9058,7 +9058,7 @@ initRoster();
 window.__upgradeReady = false;
 stage('waking the neighbours');
 try {
-  const GAME = { makeVehicleMesh, town: TOWN, THREE0, outOfBuildings, disposeChar, libFrame: LIB, guard, insideFoot, THREE, scene, camera, renderer, player, peds, traffic, vespas, parked, police, game, clock, cam, keys, stats, wallet, STORE, LM, roads, areas, shopSpots, stalls: CITTA.stalls, carriages: CITTA.carriages,
+  const GAME = { walkNear, projectOnRoad, makeVehicleMesh, town: TOWN, THREE0, outOfBuildings, disposeChar, libFrame: LIB, guard, insideFoot, THREE, scene, camera, renderer, player, peds, traffic, vespas, parked, police, game, clock, cam, keys, stats, wallet, STORE, LM, roads, areas, shopSpots, stalls: CITTA.stalls, carriages: CITTA.carriages,
     WG, CG, sfx, isTouch, vips, convos, talk, labelTargets, ZIA, FRIG, MODELS, VSPEC, TAU, dummy, vcMat,
     $, rand, pick, clamp, lerp, angDiff, hash, centroid, pip, say, toast, hint, showTG, project, resolve, resolveProps, propsNear, rayWalls, launchPed, launchPlayer, launchTraffic, launchParked,
     reactAround, setReact, setDance, startConvo, endConvo, afterSocial, resumeWalk, placePed, stepTo, faceTo, makePerson, randomLook, fullLook, posePerson, animatePerson, addMoney, fmtEur,
@@ -9076,6 +9076,7 @@ try {
   }
   stage('marking out the circuit');
   try { const lm = await loadMod('./liberta.js', 20000); lm.init(GAME); LIBM = lm; GAME.lib = lm; } catch (e) { console.error('liberta.js', e); BOOT.errs.push('liberta.js: ' + (e && e.message)); }
+  try { const pz = await loadMod('./pazzi.js'); pz.init(GAME); PAZZI = pz; } catch (e) { console.error('pazzi.js', e); BOOT.errs.push('pazzi.js: ' + (e && e.message)); }
   try { const ale = await loadMod('./ale.js', 15000); ale.init(GAME); ALE = ale; } catch (e) { console.error('ale.js', e); BOOT.errs.push('ale.js: ' + (e && e.message)); }
   try { const gio = await loadMod('./giorgio.js', 15000); gio.init(GAME, RETE); GIO = gio; GAME.boss = gio; } catch (e) { console.error('giorgio.js', e); BOOT.errs.push('giorgio.js: ' + (e && e.message)); BOOT.missing.push('Giorgio'); }
   try { const corsa = await loadMod('./corsa.js', 15000); corsa.init(GAME, RETE); CORSA = corsa; } catch (e) { console.error('corsa.js', e); BOOT.errs.push('corsa.js: ' + (e && e.message)); BOOT.missing.push('racing'); }
@@ -9102,7 +9103,7 @@ startBtn.addEventListener('click', () => {
   objective();
   toast('Benvenuto nella Kalsa', isTouch ? 'roam free · quests are in the menu' : 'roam free · quests are in the menu (Esc)', 2600);
 });
-window.__kalsa = { LIB, LIBM: () => LIBM, ALE: () => ALE, insideFoot, outOfBuildings, guard, mount, dismount, GIO: () => GIO, questTarget, perf, post, LOD_PEOPLE, personLod, PAD, padPanel: () => { try { const p = padPanel(); return p && p.id; } catch (e) { return String(e); } }, game, cam, CORSA: () => CORSA, RACE, makeVehicleMesh, makePoliceCar, CAOS, VITA, CITTA, RETE, BOOT, FAC, renderer, cityMat, clock, launchPed, launchPlayer, dispatch, afterSocial, SPECIALS, LM, streamAround, rebuildNear, CHUNKS, stream, spawnVehicle, takeParked, nearestRide, parked, MODELS, VSPEC, gps, setWaypoint, clearWaypoint, openMap, closeMap, bigMap, drawBigMap, LOTS, player, game, aran, cam, camera, sfx, vespas, FRIG, ZIA, scene, renderer, peds, traffic, nearestRoadDir, tick, keys, stats, roads, STORE, convos, talk, openTalk, talkOption, closeTalk, nearestTalkable, roster, syncRoster, studio, openStudio, closeStudio, rebuildPreview, openMenu, closeMenu, resetAll, records, posePerson, makePerson, fullLook, presetLook, setPlayerLook, encodeLook, decodeLook, startConvo, press: (k) => { if (k === 'E') actPressed = true; }, police, wallet, reportCrime, startThief, vips, addMoney, CG: () => CG, WG: () => WG, routeOn, surrender: () => respawnAfterArrest() };
+window.__kalsa = { PAZZI: () => PAZZI, LIB, LIBM: () => LIBM, ALE: () => ALE, insideFoot, outOfBuildings, guard, mount, dismount, GIO: () => GIO, questTarget, perf, post, LOD_PEOPLE, personLod, PAD, padPanel: () => { try { const p = padPanel(); return p && p.id; } catch (e) { return String(e); } }, game, cam, CORSA: () => CORSA, RACE, makeVehicleMesh, makePoliceCar, CAOS, VITA, CITTA, RETE, BOOT, FAC, renderer, cityMat, clock, launchPed, launchPlayer, dispatch, afterSocial, SPECIALS, LM, streamAround, rebuildNear, CHUNKS, stream, spawnVehicle, takeParked, nearestRide, parked, MODELS, VSPEC, gps, setWaypoint, clearWaypoint, openMap, closeMap, bigMap, drawBigMap, LOTS, player, game, aran, cam, camera, sfx, vespas, FRIG, ZIA, scene, renderer, peds, traffic, nearestRoadDir, tick, keys, stats, roads, STORE, convos, talk, openTalk, talkOption, closeTalk, nearestTalkable, roster, syncRoster, studio, openStudio, closeStudio, rebuildPreview, openMenu, closeMenu, resetAll, records, posePerson, makePerson, fullLook, presetLook, setPlayerLook, encodeLook, decodeLook, startConvo, press: (k) => { if (k === 'E') actPressed = true; }, police, wallet, reportCrime, startThief, vips, addMoney, CG: () => CG, WG: () => WG, routeOn, surrender: () => respawnAfterArrest() };
 
 </script>
 
